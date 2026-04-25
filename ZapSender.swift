@@ -1,0 +1,131 @@
+import Foundation
+
+/// Orchestrates the NIP-57 zap send flow: lnurl resolve → kind 9734 zap request →
+/// LNURL callback for bolt11 → pay via active wallet. Records `paymentHash → recipient`
+/// to UserDefaults so transaction history can show who got zapped.
+@MainActor
+enum ZapSender {
+
+    enum Failure: Error, LocalizedError {
+        case noLightningAddress
+        case lnurlUnreachable
+        case nostrZapsNotSupported
+        case amountOutOfRange(minSats: Int64, maxSats: Int64)
+        case invoiceFetchFailed
+        case noWallet
+        case payFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noLightningAddress: "Recipient has no lightning address"
+            case .lnurlUnreachable: "Could not reach lightning provider"
+            case .nostrZapsNotSupported: "Recipient does not support nostr zaps"
+            case .amountOutOfRange(let min, let max): "Amount out of range (\(min)–\(max) sats)"
+            case .invoiceFetchFailed: "Could not fetch invoice"
+            case .noWallet: "No wallet connected"
+            case .payFailed(let reason): "Payment failed: \(reason)"
+            }
+        }
+    }
+
+    /// Send a zap from `keypair` to `recipientPubkey`, optionally tagging an event id.
+    /// `relayHints` are preferred relays to put in the receipt's relays tag (e.g. live stream chat).
+    /// `extraTags` are additional zap-request tags (e.g. `["a", "30311:host:dTag"]` for stream zaps).
+    static func sendZap(
+        keypair: Keypair,
+        wallet: WalletStore,
+        recipientPubkey: String,
+        recipientLud16: String?,
+        eventId: String?,
+        amountSats: Int64,
+        message: String = "",
+        relayHints: [String] = [],
+        extraTags: [[String]] = []
+    ) async -> Result<Void, Failure> {
+        guard let lud16 = recipientLud16, lud16.contains("@") else {
+            return .failure(.noLightningAddress)
+        }
+        guard let payInfo = await Nip57.resolveLud16(lud16) else {
+            return .failure(.lnurlUnreachable)
+        }
+        guard payInfo.allowsNostr else {
+            return .failure(.nostrZapsNotSupported)
+        }
+        let amountMsats = amountSats * 1000
+        if amountMsats < payInfo.minSendable || amountMsats > payInfo.maxSendable {
+            return .failure(.amountOutOfRange(minSats: payInfo.minSendable / 1000, maxSats: payInfo.maxSendable / 1000))
+        }
+
+        // Receipt routing: recipient's read relays (so they see the receipt) + our read relays
+        // (so we can verify it). Cap at 5 — most LNURL servers reject more.
+        var relays: [String] = []
+        relays.append(contentsOf: relayHints)
+        let recipientReads = await RelayListRepository.shared.getReadRelays(recipientPubkey)
+        relays.append(contentsOf: recipientReads)
+        if let scoreboard = RelayScoreBoard.load(pubkey: keypair.pubkey) {
+            relays.append(contentsOf: scoreboard.scoredRelays.prefix(5).map(\.url))
+        }
+        var seen = Set<String>()
+        let dedupedRelays = relays.filter { seen.insert($0).inserted }.prefix(5)
+        let finalRelays = dedupedRelays.isEmpty
+            ? ["wss://relay.damus.io", "wss://nos.lol"]
+            : Array(dedupedRelays)
+
+        // Build + sign the kind 9734 zap request.
+        guard let privkey32 = Hex.decode(keypair.privkey) else {
+            return .failure(.payFailed("invalid signing key"))
+        }
+        let zapRequest: NostrEvent
+        do {
+            zapRequest = try Nip57.buildZapRequest(
+                senderPrivkey32: privkey32,
+                senderPubkey: keypair.pubkey,
+                recipientPubkey: recipientPubkey,
+                eventId: eventId,
+                amountMsats: amountMsats,
+                relays: finalRelays,
+                lnurl: lud16,
+                message: message,
+                extraTags: extraTags + (NostrEvent.clientTagIfEnabled().map { [$0] } ?? [])
+            )
+        } catch {
+            return .failure(.payFailed(error.localizedDescription))
+        }
+
+        guard let bolt11 = await Nip57.fetchInvoice(callback: payInfo.callback, amountMsats: amountMsats, zapRequest: zapRequest) else {
+            return .failure(.invoiceFetchFailed)
+        }
+
+        // Record recipient → payment hash for transaction history display.
+        if let decoded = Bolt11.decode(bolt11), let hash = decoded.paymentHash {
+            recordZapRecipient(paymentHash: hash, recipientPubkey: recipientPubkey)
+        }
+
+        switch await wallet.payInvoice(bolt11) {
+        case .success: return .success(())
+        case .failure(let err): return .failure(.payFailed(err.localizedDescription))
+        }
+    }
+
+    // MARK: - Recipient persistence
+
+    private static let recipientsKey = "wisp_zap_recipients"
+    private static let maxEntries = 500
+
+    static func recipient(forPaymentHash hash: String) -> String? {
+        let map = UserDefaults.standard.dictionary(forKey: recipientsKey) as? [String: String]
+        return map?[hash]
+    }
+
+    static func recordZapRecipient(paymentHash: String, recipientPubkey: String) {
+        var map = (UserDefaults.standard.dictionary(forKey: recipientsKey) as? [String: String]) ?? [:]
+        if map[paymentHash] == recipientPubkey { return }
+        map[paymentHash] = recipientPubkey
+        // Trim FIFO. Plain dict has no order, so when over cap we drop arbitrary keys.
+        // Acceptable: ZapSender only uses this for "who got my last few zaps" display.
+        while map.count > maxEntries {
+            if let first = map.keys.first { map.removeValue(forKey: first) }
+        }
+        UserDefaults.standard.set(map, forKey: recipientsKey)
+    }
+}

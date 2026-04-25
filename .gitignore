@@ -1,0 +1,25 @@
+## Build / derived
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+## Swift Package Manager
+.swiftpm/
+.build/
+
+## Secrets
+wisp/Resources/breez-api-key.txt
+wisp/Resources/giphy-api-key.txt
+
+## macOS
+.DS_Store
+
+## Editor
+.vscode/
+.idea/
+*.swp
+
+## ObjectBox generator backup
+model-wisp.json.bak

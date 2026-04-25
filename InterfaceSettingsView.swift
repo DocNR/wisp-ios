@@ -1,0 +1,243 @@
+import SwiftUI
+
+struct InterfaceSettingsView: View {
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.theme) private var theme
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var showAccentPicker = false
+    @State private var showCurrencyPicker = false
+    @State private var rateUpdatedAt: Date? = nil
+
+    var body: some View {
+        @Bindable var settings = settings
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                section(title: "Text") {
+                    Toggle("Large text", isOn: $settings.largeText)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                        .padding(.vertical, 4)
+                }
+
+                section(title: "Appearance") {
+                    HStack(spacing: 12) {
+                        ForEach(AppSettings.ColorSchemePreference.allCases, id: \.self) { mode in
+                            Button {
+                                settings.colorScheme = mode
+                            } label: {
+                                Text(mode.rawValue.capitalized)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .padding(.vertical, 10)
+                                    .frame(maxWidth: .infinity)
+                                    .foregroundStyle(settings.colorScheme == mode ? .white : theme.palette.onSurface)
+                                    .background(settings.colorScheme == mode ? theme.primary : theme.palette.surfaceVariant)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                }
+
+                section(title: "Themes") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12)], spacing: 12) {
+                        ForEach(Themes.all) { preset in
+                            themeCard(preset)
+                        }
+                    }
+                }
+
+                if settings.themeName == "custom" {
+                    section(title: "Accent color") {
+                        Button { showAccentPicker = true } label: {
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color(argb: settings.accentColorARGB))
+                                    .frame(width: 36, height: 36)
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.palette.outline, lineWidth: 1))
+                                Text("Pick a color")
+                                    .foregroundStyle(theme.palette.onSurface)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                            }
+                            .padding(.vertical, 8)
+                        }
+                    }
+                }
+
+                section(title: "Media") {
+                    Toggle("Auto-download media", isOn: $settings.autoLoadMedia)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("When off, images and link previews show a tap-to-load placeholder.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                        .padding(.bottom, 4)
+                    Toggle("Auto-play videos", isOn: $settings.videoAutoplay)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                        .disabled(!settings.autoLoadMedia)
+                        .opacity(settings.autoLoadMedia ? 1.0 : 0.5)
+                }
+
+                section(title: "Posting") {
+                    Toggle("Wisp client tag", isOn: $settings.clientTagEnabled)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    Text("Adds a [\"client\", \"Wisp\"] tag so others can see you're posting from Wisp.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.palette.onSurfaceVariant)
+                }
+
+                section(title: "Currency") {
+                    Toggle("Fiat mode", isOn: $settings.fiatModeEnabled)
+                        .toggleStyle(SwitchToggleStyle(tint: theme.primary))
+                    if settings.fiatModeEnabled {
+                        Button { showCurrencyPicker = true } label: {
+                            HStack {
+                                Text("Currency")
+                                    .foregroundStyle(theme.palette.onSurface)
+                                Spacer()
+                                Text(settings.fiatCurrency)
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                            }
+                            .padding(.vertical, 8)
+                        }
+                        HStack {
+                            if let updated = rateUpdatedAt {
+                                Text("Last updated \(updated.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                            } else {
+                                Text("No exchange rate cached yet")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.palette.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Button("Refresh") {
+                                Task {
+                                    await ExchangeRateService.shared.refresh()
+                                    await ExchangeRateCache.shared.updateFromService()
+                                    rateUpdatedAt = ExchangeRateCache.shared.updatedAt
+                                }
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(theme.primary)
+                        }
+                    }
+                }
+
+                Spacer(minLength: 40)
+            }
+            .padding(20)
+        }
+        .background(theme.palette.background.ignoresSafeArea())
+        .navigationTitle("Interface")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showAccentPicker) {
+            NavigationStack {
+                AccentColorPickerView()
+                    .navigationTitle("Accent color")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .sheet(isPresented: $showCurrencyPicker) {
+            NavigationStack {
+                CurrencyPickerView()
+                    .navigationTitle("Currency")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .task {
+            await ExchangeRateCache.shared.updateFromService()
+            rateUpdatedAt = ExchangeRateCache.shared.updatedAt
+        }
+    }
+
+    @ViewBuilder
+    private func section<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.palette.onSurfaceVariant)
+                .textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 8) {
+                content()
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    @ViewBuilder
+    private func themeCard(_ preset: ThemePreset) -> some View {
+        let palette = theme.isDark ? preset.dark : preset.light
+        let primary: Color = preset.id == "custom" ? Color(argb: settings.accentColorARGB) : palette.primary
+        let isSelected = settings.themeName == preset.id
+        Button {
+            settings.themeName = preset.id
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 4) {
+                    swatch(palette.background)
+                    swatch(palette.surface)
+                    swatch(primary)
+                    swatch(palette.zap)
+                }
+                Text(preset.displayName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.palette.onSurface)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isSelected ? theme.primary : theme.palette.outline,
+                            lineWidth: isSelected ? 2 : 1)
+            )
+        }
+    }
+
+    private func swatch(_ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(color)
+            .frame(width: 22, height: 22)
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.palette.outline.opacity(0.3), lineWidth: 0.5))
+    }
+}
+
+private struct CurrencyPickerView: View {
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.theme) private var theme
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List(ExchangeRateService.supported) { currency in
+            Button {
+                settings.fiatCurrency = currency.code
+                dismiss()
+            } label: {
+                HStack {
+                    Text(currency.symbol)
+                        .frame(width: 32, alignment: .leading)
+                        .foregroundStyle(theme.primary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(currency.code)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(theme.palette.onSurface)
+                        Text(currency.name)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.palette.onSurfaceVariant)
+                    }
+                    Spacer()
+                    if settings.fiatCurrency == currency.code {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(theme.primary)
+                    }
+                }
+            }
+        }
+    }
+}

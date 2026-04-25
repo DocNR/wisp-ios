@@ -1,0 +1,147 @@
+import Foundation
+import SwiftUI
+import UIKit
+import PhotosUI
+import AVFoundation
+import CoreMedia
+import UniformTypeIdentifiers
+
+struct PickedMedia: Identifiable {
+    let id = UUID()
+    /// For images, the original bytes. For videos, a poster/thumbnail JPEG (so the
+    /// composer thumbnail has something to render without loading the whole video into
+    /// memory). Empty if no thumbnail could be generated.
+    let data: Data
+    /// For videos this is the on-disk URL of the source clip — kept on disk so we don't
+    /// have to read multi-hundred-MB videos into memory before compression. Nil for images.
+    let sourceURL: URL?
+    let mime: String
+    let dim: CGSize
+    let durationSec: Int?
+    /// True if the underlying asset was a video. Used by the composer to drive kind selection.
+    var isVideo: Bool { mime.hasPrefix("video/") }
+}
+
+enum MediaPickerError: Error {
+    case unsupported
+    case loadFailed
+}
+
+/// Loads bytes + dimensions for a `PhotosPickerItem`. Reads images via `Data` transferable
+/// (preserves original bytes), and videos via a temp `MovieTransferable` to grab a URL we
+/// can introspect with AVFoundation.
+enum MediaPicker {
+
+    static func loadAll(_ items: [PhotosPickerItem]) async -> [PickedMedia] {
+        var out: [PickedMedia] = []
+        for item in items {
+            if let media = try? await load(item) {
+                out.append(media)
+            }
+        }
+        return out
+    }
+
+    static func load(_ item: PhotosPickerItem) async throws -> PickedMedia {
+        let supportedTypes = item.supportedContentTypes
+        let isVideo = supportedTypes.contains(where: { $0.conforms(to: .movie) })
+        if isVideo {
+            return try await loadVideo(item)
+        }
+        return try await loadImage(item)
+    }
+
+    private static func loadImage(_ item: PhotosPickerItem) async throws -> PickedMedia {
+        guard let data = try await item.loadTransferable(type: Data.self) else {
+            throw MediaPickerError.loadFailed
+        }
+        let mime = inferImageMime(data: data, supportedTypes: item.supportedContentTypes)
+        let dim = MediaCompressor.imageDimensions(data) ?? .zero
+        return PickedMedia(data: data, sourceURL: nil, mime: mime, dim: dim, durationSec: nil)
+    }
+
+    private static func loadVideo(_ item: PhotosPickerItem) async throws -> PickedMedia {
+        guard let movie = try await item.loadTransferable(type: MovieTransferable.self) else {
+            throw MediaPickerError.loadFailed
+        }
+        let url = movie.url
+        let mime = movie.mime
+        let asset = AVURLAsset(url: url)
+        var dim: CGSize = .zero
+        if let track = try? await asset.loadTracks(withMediaType: .video).first,
+           let size = try? await track.load(.naturalSize) {
+            if let transform = try? await track.load(.preferredTransform) {
+                let t = size.applying(transform)
+                dim = CGSize(width: abs(t.width), height: abs(t.height))
+            } else {
+                dim = size
+            }
+        }
+        var durationSec: Int? = nil
+        if let cm = try? await asset.load(.duration) {
+            let s = Int(CMTimeGetSeconds(cm))
+            if s > 0 { durationSec = s }
+        }
+        // Generate a small poster JPEG for the composer thumbnail — way cheaper than
+        // reading the whole video into memory just so the picker tile has something
+        // to draw.
+        let thumbData = await generateThumbnail(asset: asset)
+        return PickedMedia(
+            data: thumbData ?? Data(),
+            sourceURL: url,
+            mime: mime,
+            dim: dim,
+            durationSec: durationSec
+        )
+    }
+
+    private static func generateThumbnail(asset: AVURLAsset) async -> Data? {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 400, height: 400)
+        do {
+            let cgImage: CGImage
+            if #available(iOS 16.0, *) {
+                let result = try await generator.image(at: CMTime(seconds: 0.1, preferredTimescale: 600))
+                cgImage = result.image
+            } else {
+                cgImage = try generator.copyCGImage(at: CMTime(seconds: 0.1, preferredTimescale: 600), actualTime: nil)
+            }
+            return UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.7)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func inferImageMime(data: Data, supportedTypes: [UTType]) -> String {
+        if let utType = supportedTypes.first(where: { $0.conforms(to: .image) }),
+           let pref = utType.preferredMIMEType {
+            return pref
+        }
+        // Magic-byte fallback.
+        let prefix = [UInt8](data.prefix(4))
+        if prefix.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if prefix.starts(with: [0xFF, 0xD8]) { return "image/jpeg" }
+        if prefix.count >= 4, prefix.starts(with: [0x47, 0x49, 0x46]) { return "image/gif" }
+        return "image/jpeg"
+    }
+}
+
+/// Movie transferable that copies the picked video to a temp file we can pass to AVFoundation.
+struct MovieTransferable: Transferable {
+    let url: URL
+    let mime: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { movie in
+            SentTransferredFile(movie.url)
+        } importing: { received in
+            let copy = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(UUID().uuidString + "-" + received.file.lastPathComponent)
+            try? FileManager.default.removeItem(at: copy)
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            let mime = UTType(filenameExtension: copy.pathExtension)?.preferredMIMEType ?? "video/mp4"
+            return MovieTransferable(url: copy, mime: mime)
+        }
+    }
+}

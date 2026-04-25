@@ -1,0 +1,346 @@
+import Foundation
+
+/// A relay-side NIP-42 challenge that the user hasn't pre-approved. Surfaced via
+/// `RelayPool.pendingAuth` so the UI can prompt for approval. Once approved, the
+/// caller flips the relay's `auth` flag in `RelaySettingsRepository`; subsequent
+/// connects will auto-sign through `RelayPool.authSigner`.
+struct PendingAuthRequest: Sendable, Identifiable {
+    let relayUrl: String
+    let challenge: String
+    var id: String { relayUrl }
+}
+
+enum RelayPool {
+
+    // MARK: - NIP-42 hooks (set once at app start from MainView.task)
+
+    /// Returns a signed kind-22242 AUTH event for the given (relay, challenge), or
+    /// nil if signing failed / no keypair is available.
+    nonisolated(unsafe) static var authSigner: (@Sendable (_ relayUrl: String, _ challenge: String) -> NostrEvent?)?
+
+    /// Returns true if the relay is pre-approved for AUTH (auth flag on its
+    /// `GeneralRelay` entry in `RelaySettingsRepository`).
+    nonisolated(unsafe) static var authApprovalCheck: (@Sendable (_ relayUrl: String) -> Bool)?
+
+    private static let _pendingAuth = AsyncStream<PendingAuthRequest>.makeStream(bufferingPolicy: .bufferingNewest(8))
+
+    /// Stream of NIP-42 challenges from relays that are not pre-approved. The
+    /// MainView task drains this and presents `RelayAuthApprovalSheet`.
+    static var pendingAuth: AsyncStream<PendingAuthRequest> { _pendingAuth.stream }
+
+    private static func emitPendingAuth(url: String, challenge: String) {
+        if authApprovalCheck?(url) == true { return }
+        _pendingAuth.continuation.yield(PendingAuthRequest(relayUrl: url, challenge: challenge))
+    }
+
+    /// Handle an incoming `["AUTH", challenge]` frame. If the relay is pre-approved,
+    /// sign and send back an AUTH response immediately. Returns the challenge so
+    /// callers can stash it for later auth-required rejection handling.
+    fileprivate static func respondToAuthChallenge(challenge: String, urlString: String,
+                                                   ws: URLSessionWebSocketTask) async {
+        guard authApprovalCheck?(urlString) == true,
+              let event = authSigner?(urlString, challenge) else { return }
+        let payload = "[\"AUTH\",\(event.toJSON())]"
+        try? await ws.send(.string(payload))
+    }
+
+    static func query(
+        relays: [String],
+        filter: NostrFilter,
+        timeout: TimeInterval = 8
+    ) async -> [NostrEvent] {
+        let urls = relays.compactMap { URL(string: $0) }
+        guard !urls.isEmpty else { return [] }
+
+        let collector = EventCollector()
+
+        let tasks = urls.map { url in
+            Task { await streamInto(url: url, filter: filter, timeout: timeout, collector: collector) }
+        }
+
+        // Wait until any relay EOSEs or overall timeout
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if await collector.hasEose { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+
+        // Short grace for other relays to contribute
+        if await collector.hasEose {
+            try? await Task.sleep(for: .seconds(1.5))
+        }
+
+        for task in tasks { task.cancel() }
+        return await collector.events
+    }
+
+    private static func streamInto(
+        url: URL,
+        filter: NostrFilter,
+        timeout: TimeInterval,
+        collector: EventCollector
+    ) async {
+        let session = URLSession(configuration: .default)
+        let ws = session.webSocketTask(with: url)
+        ws.resume()
+
+        let subId = String(UUID().uuidString.prefix(8)).lowercased()
+        let req = "[\"REQ\",\"\(subId)\",\(filter.toJSON())]"
+
+        do { try await ws.send(.string(req)) } catch {
+            ws.cancel(with: .normalClosure, reason: nil)
+            return
+        }
+
+        let timeoutTask = Task {
+            try await Task.sleep(for: .seconds(timeout))
+            ws.cancel(with: .normalClosure, reason: nil)
+        }
+
+        var lastChallenge: String?
+        let urlString = url.absoluteString
+
+        while !Task.isCancelled {
+            do {
+                let msg = try await ws.receive()
+                guard case .string(let text) = msg else { continue }
+                guard let data = text.data(using: .utf8),
+                      let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+                      let type = arr.first as? String else { continue }
+
+                if type == "EVENT", arr.count >= 3,
+                   let obj = arr[2] as? [String: Any],
+                   let event = NostrEvent(json: obj) {
+                    await collector.add(event)
+                    let eid = event.id
+                    await MainActor.run {
+                        NoteSourceTracker.shared.record(eventId: eid, relayUrl: urlString)
+                    }
+                } else if type == "EOSE" {
+                    await collector.markEose()
+                    break
+                } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
+                    lastChallenge = challenge
+                    await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                } else if type == "CLOSED", arr.count >= 3,
+                          let reason = arr[2] as? String,
+                          reason.lowercased().contains("auth-required") {
+                    if let challenge = lastChallenge { emitPendingAuth(url: urlString, challenge: challenge) }
+                    break
+                }
+            } catch {
+                break
+            }
+        }
+
+        timeoutTask.cancel()
+        try? await ws.send(.string("[\"CLOSE\",\"\(subId)\"]"))
+        ws.cancel(with: .normalClosure, reason: nil)
+    }
+}
+
+private actor EventCollector {
+    private var _events: [NostrEvent] = []
+    private var seen = Set<String>()
+    private var eoseCount = 0
+
+    var events: [NostrEvent] { _events }
+    var hasEose: Bool { eoseCount > 0 }
+
+    func add(_ event: NostrEvent) {
+        if seen.insert(event.id).inserted {
+            _events.append(event)
+        }
+    }
+
+    func markEose() { eoseCount += 1 }
+}
+
+// MARK: - Live subscriptions (persistent)
+
+/// A long-lived multi-relay subscription. Events from any relay are deduplicated by id
+/// and yielded to `events`. The subscription stays open after EOSE for live delivery.
+final class RelaySubscription: @unchecked Sendable {
+    let id: String
+    let events: AsyncStream<(event: NostrEvent, relayUrl: String)>
+    private let continuation: AsyncStream<(event: NostrEvent, relayUrl: String)>.Continuation
+    private let dedupe = DedupeBox()
+    private var listenerTasks: [Task<Void, Never>] = []
+    private let lock = NSLock()
+
+    init(id: String) {
+        self.id = id
+        var cont: AsyncStream<(event: NostrEvent, relayUrl: String)>.Continuation!
+        self.events = AsyncStream { c in cont = c }
+        self.continuation = cont
+    }
+
+    func add(listener: Task<Void, Never>) {
+        lock.lock(); defer { lock.unlock() }
+        listenerTasks.append(listener)
+    }
+
+    func deliver(event: NostrEvent, relayUrl: String) async {
+        if await dedupe.insert(event.id) {
+            continuation.yield((event, relayUrl))
+        }
+    }
+
+    func cancel() {
+        lock.lock()
+        let tasks = listenerTasks
+        listenerTasks.removeAll()
+        lock.unlock()
+        for t in tasks { t.cancel() }
+        continuation.finish()
+    }
+}
+
+private actor DedupeBox {
+    private var seen = Set<String>()
+    func insert(_ id: String) -> Bool { seen.insert(id).inserted }
+}
+
+extension RelayPool {
+
+    /// Open a persistent multi-relay subscription. The returned `RelaySubscription` keeps its
+    /// WebSockets open after EOSE and yields incoming `EVENT` messages on `.events`.
+    /// Auto-reconnects with exponential backoff on socket errors so long-running consumers
+    /// (e.g. live-stream chat) survive transient network drops. A server-sent `CLOSED`
+    /// frame is treated as terminal and stops reconnecting.
+    static func subscribe(relays: [String], filter: NostrFilter, id: String) -> RelaySubscription {
+        let sub = RelaySubscription(id: id)
+        let urls = relays.compactMap { URL(string: $0) }
+        let req = "[\"REQ\",\"\(id)\",\(filter.toJSON())]"
+        let closeMsg = "[\"CLOSE\",\"\(id)\"]"
+        for url in urls {
+            let task = Task {
+                var attempt = 0
+                outer: while !Task.isCancelled {
+                    let session = URLSession(configuration: .default)
+                    let ws = session.webSocketTask(with: url)
+                    ws.resume()
+
+                    do { try await ws.send(.string(req)) } catch {
+                        ws.cancel(with: .normalClosure, reason: nil)
+                        if Task.isCancelled { break outer }
+                        let delay = min(30.0, pow(2.0, Double(attempt)))
+                        attempt += 1
+                        try? await Task.sleep(for: .seconds(delay))
+                        continue
+                    }
+
+                    var serverClosed = false
+                    var lastChallenge: String?
+                    let urlString = url.absoluteString
+                    inner: while !Task.isCancelled {
+                        do {
+                            let msg = try await ws.receive()
+                            guard case .string(let text) = msg else { continue }
+                            guard let data = text.data(using: .utf8),
+                                  let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+                                  let type = arr.first as? String else { continue }
+                            if type == "EVENT", arr.count >= 3,
+                               let obj = arr[2] as? [String: Any],
+                               let event = NostrEvent(json: obj) {
+                                attempt = 0
+                                let eid = event.id
+                                await MainActor.run {
+                                    NoteSourceTracker.shared.record(eventId: eid, relayUrl: urlString)
+                                }
+                                await sub.deliver(event: event, relayUrl: urlString)
+                            } else if type == "CLOSED" {
+                                let reason = (arr.count >= 3 ? (arr[2] as? String ?? "") : "").lowercased()
+                                if reason.contains("auth-required"), let challenge = lastChallenge {
+                                    emitPendingAuth(url: urlString, challenge: challenge)
+                                }
+                                serverClosed = true
+                                break inner
+                            } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
+                                lastChallenge = challenge
+                                await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                            }
+                            // EOSE intentionally ignored: keep listening for live events.
+                        } catch {
+                            break inner
+                        }
+                    }
+
+                    if Task.isCancelled {
+                        try? await ws.send(.string(closeMsg))
+                        ws.cancel(with: .normalClosure, reason: nil)
+                        break outer
+                    }
+                    ws.cancel(with: .normalClosure, reason: nil)
+                    if serverClosed { break outer }
+
+                    let delay = min(30.0, pow(2.0, Double(attempt)))
+                    attempt += 1
+                    try? await Task.sleep(for: .seconds(delay))
+                }
+            }
+            sub.add(listener: task)
+        }
+        return sub
+    }
+
+    /// One-shot publish: send an EVENT to each relay, await server reply (OK / NOTICE) or timeout.
+    /// Returns the set of relay URLs that responded with OK.
+    /// A hard timeout cancels the socket — `ws.receive()` can otherwise block past the deadline
+    /// on relays that accept the connection but never send `OK` (some implementations drop OKs).
+    @discardableResult
+    static func publish(event: NostrEvent, to relays: [String], timeout: TimeInterval = 4) async -> [String] {
+        let urls = relays.compactMap { URL(string: $0) }
+        guard !urls.isEmpty else { return [] }
+        let payload = "[\"EVENT\",\(event.toJSON())]"
+
+        return await withTaskGroup(of: String?.self) { group in
+            for url in urls {
+                group.addTask {
+                    let session = URLSession(configuration: .default)
+                    let ws = session.webSocketTask(with: url)
+                    ws.resume()
+                    let killer = Task {
+                        try? await Task.sleep(for: .seconds(timeout))
+                        ws.cancel(with: .normalClosure, reason: nil)
+                    }
+                    defer {
+                        killer.cancel()
+                        ws.cancel(with: .normalClosure, reason: nil)
+                    }
+                    do { try await ws.send(.string(payload)) } catch { return nil }
+                    var lastChallenge: String?
+                    let urlString = url.absoluteString
+                    while !Task.isCancelled {
+                        do {
+                            let msg = try await ws.receive()
+                            if case .string(let text) = msg,
+                               let data = text.data(using: .utf8),
+                               let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+                               let type = arr.first as? String {
+                                if type == "OK", arr.count >= 3,
+                                   let eventId = arr[1] as? String,
+                                   eventId == event.id,
+                                   let ok = arr[2] as? Bool {
+                                    if ok { return urlString }
+                                    let reason = (arr.count >= 4 ? (arr[3] as? String ?? "") : "").lowercased()
+                                    if reason.hasPrefix("auth-required"), let challenge = lastChallenge {
+                                        emitPendingAuth(url: urlString, challenge: challenge)
+                                    }
+                                    return nil
+                                } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
+                                    lastChallenge = challenge
+                                    await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                                }
+                            }
+                        } catch { return nil }
+                    }
+                    return nil
+                }
+            }
+            var ok: [String] = []
+            for await r in group { if let r { ok.append(r) } }
+            return ok
+        }
+    }
+}

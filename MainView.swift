@@ -1,0 +1,1001 @@
+import SwiftUI
+
+struct MainView: View {
+    let keypair: Keypair
+    let onLogout: () -> Void
+    @State private var viewModel: FeedViewModel
+    @State private var messagesVM: MessagesViewModel
+    @State private var notificationsVM: NotificationsViewModel
+    @State private var groupListVM: GroupListViewModel
+    @State private var searchVM: SearchViewModel
+    @State private var walletStore: WalletStore
+    @State private var selectedTab: BottomTab = .home
+    @State private var feedPath = NavigationPath()
+    @State private var placeholderPath = NavigationPath()
+    @State private var notificationsPath = NavigationPath()
+    @State private var searchPath = NavigationPath()
+    @State private var drawerOpen = false
+    @State private var drawerDragOffset: CGFloat = 0
+    @State private var engagementRepo = EngagementRepository.shared
+    @State private var liveStreamRepo = LiveStreamRepository.shared
+    @State private var showInterfaceSettings = false
+    @State private var showCustomEmojis = false
+    @State private var showHashtagSets = false
+    @State private var showLists = false
+    @State private var showCompose = false
+    @State private var showDraftsScheduled = false
+    @State private var showRelayPicker = false
+    @State private var showOnlineSheet = false
+    @State private var showSocialGraph = false
+    @State private var showSafety = false
+    @State private var showProofOfWork = false
+    @State private var showMediaServers = false
+    @State private var pendingDraft: Nip37.Draft?
+    @State private var hashtagSetRepo = HashtagSetRepository.shared
+    @State private var showRelaySettings = false
+    @State private var pendingAuthRequest: PendingAuthRequest?
+
+    private let drawerWidth: CGFloat = 320
+
+    init(keypair: Keypair, onLogout: @escaping () -> Void = {}) {
+        self.keypair = keypair
+        self.onLogout = onLogout
+        _viewModel = State(initialValue: FeedViewModel(keypair: keypair))
+        _messagesVM = State(initialValue: MessagesViewModel(keypair: keypair))
+        _notificationsVM = State(initialValue: NotificationsViewModel(keypair: keypair))
+        _groupListVM = State(initialValue: GroupListViewModel(keypair: keypair))
+        _searchVM = State(initialValue: SearchViewModel(keypair: keypair))
+        _walletStore = State(initialValue: WalletStore(keypair: keypair))
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            mainShell
+
+
+            if drawerOpen {
+                Color.black
+                    .opacity(0.4)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .onTapGesture { closeDrawer() }
+            }
+
+            SidebarDrawerView(
+                profile: viewModel.userProfile,
+                pubkey: keypair.pubkey,
+                onClose: { closeDrawer() },
+                onSelectTab: { tab in
+                    selectedTab = tab
+                    closeDrawer()
+                },
+                onLogout: {
+                    NostrKey.delete()
+                    EngagementRepository.shared.clear()
+                    PollTallyRepository.shared.clear()
+                    EmojiRepository.shared.clear()
+                    NoteSourceTracker.shared.clear()
+                    LiveStreamRepository.shared.clear()
+                    LivePlayerStore.shared.releaseAll()
+                    MuteRepository.shared.unbind()
+                    SafetyPreferences.shared.unbind()
+                    Task {
+                        await ExtendedNetworkRepository.shared.unbind()
+                        await SafetyFilter.shared.rebuildSnapshot()
+                        await SpamScorer.shared.clearCache()
+                    }
+                    closeDrawer()
+                    onLogout()
+                },
+                onOpenInterface: {
+                    closeDrawer()
+                    showInterfaceSettings = true
+                },
+                onOpenDraftsScheduled: {
+                    closeDrawer()
+                    showDraftsScheduled = true
+                },
+                onOpenCustomEmojis: {
+                    closeDrawer()
+                    showCustomEmojis = true
+                },
+                onOpenLists: {
+                    closeDrawer()
+                    showLists = true
+                },
+                onOpenHashtagSets: {
+                    closeDrawer()
+                    showHashtagSets = true
+                },
+                onOpenSocialGraph: {
+                    closeDrawer()
+                    showSocialGraph = true
+                },
+                onOpenSafety: {
+                    closeDrawer()
+                    showSafety = true
+                },
+                onOpenProofOfWork: {
+                    closeDrawer()
+                    showProofOfWork = true
+                },
+                onOpenRelays: {
+                    closeDrawer()
+                    showRelaySettings = true
+                },
+                onOpenMediaServers: {
+                    closeDrawer()
+                    showMediaServers = true
+                }
+            )
+            .frame(width: drawerWidth)
+            .frame(maxHeight: .infinity)
+            .background(Color.wispBackground)
+            .offset(x: drawerOpen ? drawerDragOffset : -drawerWidth)
+            .animation(.smooth(duration: 0.25), value: drawerOpen)
+            .gesture(drawerDragGesture)
+        }
+        .background(Color.wispBackground)
+        .environment(walletStore)
+        .task {
+            GroupListViewModelRegistry.register(groupListVM)
+
+            // NIP-42 AUTH wiring. Set the static hooks before any RelayPool call so
+            // pre-approved relays auto-sign their challenges. The approval check reads
+            // UserDefaults directly (thread-safe, callable from socket task contexts);
+            // the signer captures the active keypair via closure.
+            let activeKeypair = keypair
+            let activePubkey = keypair.pubkey
+            RelayPool.authApprovalCheck = { url in
+                RelaySettingsRepository.isAuthApproved(url, pubkey: activePubkey)
+            }
+            RelayPool.authSigner = { url, challenge in
+                try? Nip42.buildAuthEvent(challenge: challenge, relayUrl: url, keypair: activeKeypair)
+            }
+
+            // Drain pending AUTH challenges into the approval sheet state.
+            Task { @MainActor in
+                for await req in RelayPool.pendingAuth {
+                    if pendingAuthRequest == nil {
+                        pendingAuthRequest = req
+                    }
+                }
+            }
+
+            // Safety bootstrap — bind the per-account stores, rebuild the lockless filter
+            // snapshot, then kick the off-main work (NSpam warmup, mute sync, optional WoT
+            // recompute). All four ingest paths consult the snapshot lockless on every event,
+            // so this must run before any subscription opens.
+            let privkey32 = Hex.decode(keypair.privkey)
+            MuteRepository.shared.bind(activePubkey: keypair.pubkey, privkey32: privkey32)
+            SafetyPreferences.shared.bind(activePubkey: keypair.pubkey)
+            await ExtendedNetworkRepository.shared.bind(activePubkey: keypair.pubkey)
+            await SafetyFilter.shared.rebuildSnapshot()
+            Task.detached { try? await SpamScorer.shared.warmUp() }
+            if let priv = privkey32 {
+                MuteRepository.shared.startSync(privkey32: priv)
+            }
+            Task.detached(priority: .utility) {
+                if await SafetyPreferences.shared.wotFilterEnabled,
+                   await ExtendedNetworkRepository.shared.isStale() {
+                    await ExtendedNetworkRepository.shared.recompute()
+                }
+            }
+
+            // Run all VM startups concurrently — sequential awaits made notifications wait
+            // ~5-8s for feed + messages to finish their relay round trips before even opening
+            // a single websocket of their own.
+            async let feed: Void = viewModel.start()
+            async let messages: Void = messagesVM.start()
+            async let notifications: Void = notificationsVM.start()
+            async let groups: Void = groupListVM.start()
+            async let emoji: Void = EmojiRepository.shared.refresh(for: keypair.pubkey)
+            async let hashtagSets: Void = HashtagSetRepository.shared.bootstrap(keypair: keypair)
+            async let peopleLists: Void = PeopleListRepository.shared.bootstrap(keypair: keypair)
+            async let noteLists: Void = NoteListRepository.shared.bootstrap(keypair: keypair)
+            async let relaySettings: Void = RelaySettingsRepository.shared.bootstrap(keypair: keypair)
+            _ = await (feed, messages, notifications, groups, emoji, hashtagSets, peopleLists, noteLists, relaySettings)
+        }
+        .onDisappear {
+            viewModel.stop()
+            messagesVM.stop()
+            notificationsVM.stop()
+            groupListVM.stop()
+            searchVM.stop()
+        }
+        .sheet(isPresented: $showInterfaceSettings) {
+            NavigationStack {
+                InterfaceSettingsView()
+            }
+        }
+        .sheet(isPresented: $showRelaySettings) {
+            NavigationStack {
+                RelaySettingsView(keypair: keypair)
+            }
+        }
+        .sheet(item: $pendingAuthRequest) { req in
+            RelayAuthApprovalSheet(
+                relayUrl: req.relayUrl,
+                keypair: keypair,
+                onDismiss: { pendingAuthRequest = nil }
+            )
+        }
+        .sheet(isPresented: $showCustomEmojis) {
+            NavigationStack {
+                CustomEmojiSettingsView(keypair: keypair)
+            }
+        }
+        .sheet(isPresented: $showLists) {
+            NavigationStack {
+                ListsHubView(
+                    keypair: keypair,
+                    onViewPeopleFeed: { list in
+                        showLists = false
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(350))
+                            feedPath.append(PeopleListFeedRoute(dTag: list.dTag))
+                            selectedTab = .home
+                        }
+                    },
+                    onViewNoteFeed: { list in
+                        showLists = false
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(350))
+                            feedPath.append(NoteListFeedRoute(dTag: list.dTag))
+                            selectedTab = .home
+                        }
+                    }
+                )
+                .navigationDestination(for: PeopleListEditorRoute.self) { route in
+                    PeopleListEditorView(
+                        keypair: keypair,
+                        dTag: route.dTag,
+                        onViewFeed: { list in
+                            showLists = false
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(350))
+                                feedPath.append(PeopleListFeedRoute(dTag: list.dTag))
+                                selectedTab = .home
+                            }
+                        }
+                    )
+                }
+                .navigationDestination(for: NoteListEditorRoute.self) { route in
+                    NoteListEditorView(
+                        keypair: keypair,
+                        dTag: route.dTag,
+                        onViewFeed: { list in
+                            showLists = false
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(350))
+                                feedPath.append(NoteListFeedRoute(dTag: list.dTag))
+                                selectedTab = .home
+                            }
+                        }
+                    )
+                }
+            }
+        }
+        .sheet(isPresented: $showHashtagSets) {
+            NavigationStack {
+                HashtagSetsView(
+                    keypair: keypair,
+                    onViewFeed: { set in
+                        showHashtagSets = false
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(350))
+                            feedPath.append(HashtagFeedRoute(setDTag: set.dTag))
+                            selectedTab = .home
+                        }
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showCompose) {
+            if let draft = pendingDraft {
+                ComposeView(keypair: keypair, draft: draft)
+                    .onDisappear { pendingDraft = nil }
+            } else {
+                ComposeView(keypair: keypair, mode: .new)
+            }
+        }
+        .sheet(isPresented: $showRelayPicker) {
+            RelayPickerSheet(
+                keypair: keypair,
+                onSelectRelay: { url in viewModel.selectRelay(url: url) },
+                onSelectRelaySet: { set in viewModel.selectRelaySet(set) }
+            )
+        }
+        .sheet(isPresented: $showSocialGraph) {
+            SocialGraphView(keypair: keypair)
+        }
+        .sheet(isPresented: $showSafety) {
+            NavigationStack {
+                SafetySettingsView(keypair: keypair)
+            }
+        }
+        .sheet(isPresented: $showProofOfWork) {
+            NavigationStack {
+                ProofOfWorkSettingsView()
+            }
+        }
+        .sheet(isPresented: $showMediaServers) {
+            NavigationStack {
+                MediaServersView(keypair: keypair)
+            }
+        }
+        .sheet(isPresented: $showDraftsScheduled) {
+            DraftsScheduledView(keypair: keypair) { draft in
+                pendingDraft = draft
+                showDraftsScheduled = false
+                // Brief delay so the dismiss animation completes before we present
+                // the composer sheet — SwiftUI rejects overlapping sheet transitions.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    showCompose = true
+                }
+            }
+        }
+        .sheet(isPresented: $showOnlineSheet) {
+            OnlineNowSheet(
+                networkPubkeys: viewModel.onlineNetworkPubkeys,
+                globalCount: viewModel.globalOnlineCount,
+                profiles: viewModel.profiles,
+                onTapProfile: { pubkey in
+                    showOnlineSheet = false
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        feedPath.append(ProfileRoute(pubkey: pubkey))
+                        selectedTab = .home
+                    }
+                }
+            )
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+
+    private var mainShell: some View {
+        VStack(spacing: 0) {
+            if selectedTab == .home {
+                topBar
+                Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            }
+
+            ZStack {
+                switch selectedTab {
+                case .home:
+                    NavigationStack(path: $feedPath) {
+                        ZStack(alignment: .bottomTrailing) {
+                            feedContent
+                            if !drawerOpen {
+                                ComposeFAB { showCompose = true }
+                                    .padding(.trailing, 18)
+                                    .padding(.bottom, 70)
+                            }
+                        }
+                            .navigationDestination(for: ProfileRoute.self) { route in
+                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                            }
+                            .navigationDestination(for: ThreadRoute.self) { route in
+                                ThreadView(
+                                    seedEventId: route.eventId,
+                                    authorHint: route.authorPubkey,
+                                    keypair: keypair
+                                )
+                            }
+                            .navigationDestination(for: LiveStreamRoute.self) { route in
+                                LiveStreamView(route: route, keypair: keypair)
+                                    .environment(walletStore)
+                            }
+                            .navigationDestination(for: HashtagFeedRoute.self) { route in
+                                hashtagFeedView(for: route)
+                            }
+                            .navigationDestination(for: PeopleListFeedRoute.self) { route in
+                                PeopleListFeedView(
+                                    keypair: keypair,
+                                    dTag: route.dTag,
+                                    onProfileTap: { pubkey in
+                                        feedPath.append(ProfileRoute(pubkey: pubkey))
+                                    },
+                                    onNoteTap: { eventId in
+                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
+                                    },
+                                    onHashtagTap: { tag in
+                                        feedPath.append(HashtagFeedRoute(tag: tag))
+                                    }
+                                )
+                            }
+                            .navigationDestination(for: NoteListFeedRoute.self) { route in
+                                NoteListFeedView(
+                                    keypair: keypair,
+                                    dTag: route.dTag,
+                                    onProfileTap: { pubkey in
+                                        feedPath.append(ProfileRoute(pubkey: pubkey))
+                                    },
+                                    onNoteTap: { eventId in
+                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
+                                    },
+                                    onHashtagTap: { tag in
+                                        feedPath.append(HashtagFeedRoute(tag: tag))
+                                    }
+                                )
+                            }
+                            .navigationDestination(for: TrendingFeedRoute.self) { _ in
+                                TrendingFeedView(
+                                    keypair: keypair,
+                                    onProfileTap: { pubkey in
+                                        feedPath.append(ProfileRoute(pubkey: pubkey))
+                                    },
+                                    onNoteTap: { eventId in
+                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: ""))
+                                    },
+                                    onHashtagTap: { tag in
+                                        feedPath.append(HashtagFeedRoute(tag: tag))
+                                    }
+                                )
+                            }
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                case .messages:
+                    MessagesView(viewModel: messagesVM, groupListVM: groupListVM)
+                case .search:
+                    NavigationStack(path: $searchPath) {
+                        SearchView(keypair: keypair, viewModel: searchVM, path: $searchPath)
+                            .navigationDestination(for: ProfileRoute.self) { route in
+                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                            }
+                            .navigationDestination(for: ThreadRoute.self) { route in
+                                ThreadView(
+                                    seedEventId: route.eventId,
+                                    authorHint: route.authorPubkey,
+                                    keypair: keypair
+                                )
+                            }
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                case .notifications:
+                    NavigationStack(path: $notificationsPath) {
+                        NotificationsView(
+                            viewModel: notificationsVM,
+                            onPeerTap: { pubkey in
+                                notificationsPath.append(ProfileRoute(pubkey: pubkey))
+                            },
+                            onDmTap: { _ in
+                                selectedTab = .messages
+                            }
+                        )
+                        .navigationDestination(for: ProfileRoute.self) { route in
+                            ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                        }
+                        .navigationDestination(for: ThreadRoute.self) { route in
+                            ThreadView(
+                                seedEventId: route.eventId,
+                                authorHint: route.authorPubkey,
+                                keypair: keypair
+                            )
+                        }
+                        .toolbar(.hidden, for: .navigationBar)
+                    }
+                case .wallet:
+                    NavigationStack {
+                        WalletView(store: walletStore)
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                default:
+                    NavigationStack(path: $placeholderPath) {
+                        placeholderTab
+                            .navigationDestination(for: ProfileRoute.self) { route in
+                                ProfileView(pubkey: route.pubkey, activeUserPubkey: keypair.pubkey)
+                            }
+                            .navigationDestination(for: ThreadRoute.self) { route in
+                                ThreadView(
+                                    seedEventId: route.eventId,
+                                    authorHint: route.authorPubkey,
+                                    keypair: keypair
+                                )
+                            }
+                            .toolbar(.hidden, for: .navigationBar)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+
+            bottomBar
+        }
+        .background(Color.wispBackground)
+    }
+
+    // MARK: - Drawer
+
+    private func openDrawer() {
+        drawerDragOffset = 0
+        withAnimation(.smooth(duration: 0.25)) { drawerOpen = true }
+    }
+
+    private func closeDrawer() {
+        withAnimation(.smooth(duration: 0.25)) {
+            drawerOpen = false
+            drawerDragOffset = 0
+        }
+    }
+
+    private var drawerDragGesture: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                guard drawerOpen else { return }
+                drawerDragOffset = min(0, value.translation.width)
+            }
+            .onEnded { value in
+                guard drawerOpen else { return }
+                if value.translation.width < -drawerWidth * 0.3 {
+                    closeDrawer()
+                } else {
+                    withAnimation(.smooth(duration: 0.2)) { drawerDragOffset = 0 }
+                }
+            }
+    }
+
+    // MARK: - Top Bar
+
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            profileAvatar
+
+            Spacer()
+
+            feedPicker
+
+            Spacer()
+
+            HStack(spacing: 8) {
+                if !viewModel.onlineNetworkPubkeys.isEmpty {
+                    Button {
+                        showOnlineSheet = true
+                    } label: {
+                        statusPill(
+                            icon: "person.fill",
+                            value: formatCount(viewModel.onlineNetworkPubkeys.count),
+                            color: .wispRepostColor
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Menu {
+                    if viewModel.connectedRelays.isEmpty {
+                        Text("Not connected")
+                    } else {
+                        ForEach(viewModel.connectedRelays, id: \.url) { relay in
+                            let host = URL(string: relay.url)?.host ?? relay.url
+                            Button { } label: {
+                                Text("\(host) (\(relay.authorCount))")
+                            }
+                        }
+                    }
+                } label: {
+                    statusPill(
+                        icon: "network",
+                        value: "\(viewModel.connectedRelayCount)",
+                        color: viewModel.connectedRelayCount > 0 ? .wispRepostColor : .red
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private var profileAvatar: some View {
+        Button {
+            openDrawer()
+        } label: {
+            CachedAvatarView(url: viewModel.userProfile?.picture, size: 32)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var feedPicker: some View {
+        Menu {
+            Button {
+                viewModel.selectFollows()
+            } label: {
+                Label("Follows", systemImage: viewModel.currentKind == .follows ? "checkmark" : "person.2")
+            }
+            Button {
+                showRelayPicker = true
+            } label: {
+                let active: Bool = {
+                    switch viewModel.currentKind {
+                    case .follows, .extendedNetwork: return false
+                    case .relay, .relaySet: return true
+                    }
+                }()
+                Label("Relay", systemImage: active ? "checkmark" : "antenna.radiowaves.left.and.right")
+            }
+
+            Button {
+                viewModel.selectExtendedNetwork()
+            } label: {
+                Label(
+                    "Extended Network",
+                    systemImage: viewModel.currentKind == .extendedNetwork
+                        ? "checkmark"
+                        : "point.3.connected.trianglepath.dotted"
+                )
+            }
+
+            Button {
+                showHashtagSets = true
+            } label: {
+                Label("Hashtags", systemImage: "number")
+            }
+
+            Button {
+                showLists = true
+            } label: {
+                Label("Lists", systemImage: "list.bullet")
+            }
+
+            Button {
+                feedPath.append(TrendingFeedRoute())
+            } label: {
+                Label("Trending", systemImage: "flame")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(viewModel.currentKind.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
+            .foregroundStyle(Color.primary)
+        }
+    }
+
+    private func statusPill(icon: String, value: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.caption.weight(.medium))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    // MARK: - Feed Content
+
+    private var emptyStateTitle: String {
+        switch viewModel.currentKind {
+        case .follows: return "No posts yet"
+        case .relay: return "Connecting…"
+        case .relaySet: return "Connecting…"
+        case .extendedNetwork:
+            return SocialGraphCache.load(pubkey: keypair.pubkey) == nil
+                ? "No extended network yet"
+                : "Connecting…"
+        }
+    }
+
+    private var emptyStateSubtitle: String {
+        switch viewModel.currentKind {
+        case .follows:
+            return "Follow some people to see their posts here"
+        case .relay(let url):
+            return "Waiting for events from \(URL(string: url)?.host ?? url)."
+        case .relaySet(let set):
+            return "Waiting for events across \(set.relays.count) relay\(set.relays.count == 1 ? "" : "s")."
+        case .extendedNetwork:
+            if SocialGraphCache.load(pubkey: keypair.pubkey) == nil {
+                return "Compute your social graph to see posts from accounts followed by your follows."
+            }
+            return "Waiting for events from your extended network."
+        }
+    }
+
+    @ViewBuilder
+    private var emptyStateExtraAction: some View {
+        if case .extendedNetwork = viewModel.currentKind,
+           SocialGraphCache.load(pubkey: keypair.pubkey) == nil {
+            Button {
+                showSocialGraph = true
+            } label: {
+                Text("Compute Now")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+                    .background(Color.wispPrimary, in: RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(.white)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var relayFeedStatusBanner: some View {
+        if case .follows = viewModel.currentKind {
+            EmptyView()
+        } else {
+            switch viewModel.relayFeedStatus {
+            case .idle, .streaming:
+                EmptyView()
+            case .connecting:
+                statusBanner(text: "Connecting…", color: .secondary)
+            case .noEvents:
+                statusBanner(text: "No events received yet", color: .orange)
+            case .timedOut:
+                statusBanner(text: "Connection timed out", color: .red)
+            case .connectionFailed(let msg):
+                statusBanner(text: msg, color: .red)
+            }
+        }
+    }
+
+    private func statusBanner(text: String, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(text).font(.caption)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Color.wispSurfaceVariant.opacity(0.4))
+    }
+
+    private var feedContent: some View {
+        VStack(spacing: 0) {
+            relayFeedStatusBanner
+            feedBody
+        }
+    }
+
+    private var feedBody: some View {
+        Group {
+            if viewModel.isLoading && viewModel.events.isEmpty {
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("Loading your feed\u{2026}")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.events.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                    Text(emptyStateTitle)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text(emptyStateSubtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    emptyStateExtraAction
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        let liveStreams = liveStreamRepo.liveNowSorted
+                        if !liveStreams.isEmpty {
+                            LiveNowRow(
+                                streams: liveStreams,
+                                profiles: viewModel.profiles,
+                                onSelect: { stream in
+                                    feedPath.append(LiveStreamRoute(
+                                        aTagValue: stream.aTagValue,
+                                        hostPubkey: stream.activity.hostPubkey,
+                                        dTag: stream.activity.dTag,
+                                        relayHints: stream.activity.relayHints
+                                    ))
+                                }
+                            )
+                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        }
+                        ForEach(Array(viewModel.events.enumerated()), id: \.element.id) { index, event in
+                            NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
+                                PostCardView(
+                                    event: event,
+                                    profile: viewModel.profiles[event.pubkey],
+                                    profiles: viewModel.profiles,
+                                    engagement: engagementRepo.counts[event.id],
+                                    onProfileTap: { pubkey in
+                                        Task { await viewModel.requestProfileIfNeeded(pubkey) }
+                                    },
+                                    onNoteTap: { eventId in
+                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: event.pubkey))
+                                    },
+                                    onHashtagTap: { tag in
+                                        feedPath.append(HashtagFeedRoute(tag: tag))
+                                    }
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .onAppear {
+                                engagementRepo.markVisible(eventId: event.id, author: event.pubkey)
+                                if index >= viewModel.events.count - 5 {
+                                    switch viewModel.currentKind {
+                                    case .follows: break
+                                    case .relay, .relaySet, .extendedNetwork: viewModel.loadMore()
+                                    }
+                                }
+                            }
+                            Divider()
+                                .overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        }
+                    }
+                }
+                .refreshable { await viewModel.refresh() }
+            }
+        }
+    }
+
+    private var placeholderTab: some View {
+        VStack(spacing: 12) {
+            Image(systemName: selectedTab.icon)
+                .font(.system(size: 40))
+                .foregroundStyle(.tertiary)
+            Text(selectedTab.rawValue.capitalized)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.tertiary)
+            Text("Coming soon")
+                .font(.caption)
+                .foregroundStyle(.quaternary)
+        }
+    }
+
+    // MARK: - Bottom Bar
+
+    private var bottomBar: some View {
+        HStack {
+            ForEach(BottomTab.allCases, id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    Image(systemName: tab == selectedTab ? tab.selectedIcon : tab.icon)
+                        .font(.system(size: 22))
+                        .frame(height: 28)
+                        .frame(maxWidth: .infinity)
+                        .overlay(alignment: .topTrailing) {
+                            if tab == .notifications, notificationsVM.hasUnread {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 8, height: 8)
+                                    .offset(x: -10, y: 2)
+                            }
+                        }
+                }
+                .foregroundStyle(tab == selectedTab ? Color.wispPrimary : .secondary)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.bottom, 2)
+    }
+
+    // MARK: - Helpers
+
+    private func formatCount(_ n: Int) -> String {
+        switch n {
+        case 1_000_000...: String(format: "%.1fM", Double(n) / 1_000_000)
+        case 1_000...: String(format: "%.1fk", Double(n) / 1_000)
+        default: "\(n)"
+        }
+    }
+
+    @ViewBuilder
+    private func hashtagFeedView(for route: HashtagFeedRoute) -> some View {
+        if let tag = route.tag {
+            HashtagFeedView(
+                keypair: keypair,
+                source: .single(tag),
+                onHashtagTap: { newTag in
+                    feedPath.append(HashtagFeedRoute(tag: newTag))
+                }
+            )
+        } else if let dTag = route.setDTag,
+                  let set = hashtagSetRepo.hashtagSet(dTag: dTag) {
+            HashtagFeedView(
+                keypair: keypair,
+                source: .set(set),
+                onHashtagTap: { newTag in
+                    feedPath.append(HashtagFeedRoute(tag: newTag))
+                }
+            )
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.tertiary)
+                Text("Set not found")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.wispBackground)
+        }
+    }
+}
+
+// MARK: - Bottom Tab Definition
+
+enum BottomTab: String, CaseIterable {
+    case home
+    case wallet
+    case search
+    case messages
+    case notifications
+
+    var icon: String {
+        switch self {
+        case .home: "house"
+        case .wallet: "creditcard"
+        case .search: "magnifyingglass"
+        case .messages: "bubble.left.and.bubble.right"
+        case .notifications: "bell"
+        }
+    }
+
+    var selectedIcon: String {
+        switch self {
+        case .home: "house.fill"
+        case .wallet: "creditcard.fill"
+        case .search: "magnifyingglass"
+        case .messages: "bubble.left.and.bubble.right.fill"
+        case .notifications: "bell.fill"
+        }
+    }
+}
+
+private struct OnlineNowSheet: View {
+    let networkPubkeys: [String]
+    let globalCount: Int?
+    let profiles: [String: ProfileData]
+    let onTapProfile: (String) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Online Now")
+                    .font(.title2.weight(.semibold))
+
+                row(text: "\(networkPubkeys.count) online in your network")
+                if let g = globalCount {
+                    row(text: "\(g) online across all of Nostr")
+                }
+
+                FlowLayout(spacing: 8) {
+                    ForEach(networkPubkeys, id: \.self) { pk in
+                        Button {
+                            onTapProfile(pk)
+                        } label: {
+                            CachedAvatarView(url: profiles[pk]?.picture, size: 44)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+        }
+    }
+
+    private func row(text: String) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color.wispRepostColor).frame(width: 8, height: 8)
+            Text(text).font(.subheadline)
+        }
+    }
+}

@@ -1,0 +1,459 @@
+import SwiftUI
+
+struct NotificationRowView: View {
+    let group: NotificationGroup
+    let viewModel: NotificationsViewModel
+    let onPeerTap: (String) -> Void
+    let onDmTap: (String) -> Void
+
+    @State private var expanded = false
+    @State private var profiles: [String: ProfileData] = [:]
+    @State private var sendingReply = false
+    @ObservedObject private var emojiCache = EmojiImageCache.shared
+
+    private let repo = NotificationRepository.shared
+    private let profileRepo = ProfileRepository.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            collapsedRow
+                .contentShape(Rectangle())
+                .onTapGesture { handleTap() }
+
+            if expanded { expandedContent }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(rowBackground)
+        .task(id: group.id) { hydrateProfiles() }
+    }
+
+    // MARK: - Collapsed row
+
+    private var collapsedRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            NotificationTypeIcon(kind: group.kind)
+                .padding(.top, 2)
+
+            avatarsCluster
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    headline
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Text(relativeTime(from: group.latestTs))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let snippet = referencedSnippet {
+                    Text(snippet)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .padding(.top, 2)
+                }
+            }
+        }
+    }
+
+    private var avatarsCluster: some View {
+        // Show up to 2 actor avatars; group counts > 1 shown as "+N" overlay.
+        let pubkeys = primaryActors().prefix(2)
+        return HStack(spacing: -6) {
+            ForEach(Array(pubkeys.enumerated()), id: \.offset) { _, pk in
+                CachedAvatarView(url: profiles[pk]?.picture, size: 32)
+                    .overlay(Circle().stroke(Color.wispBackground, lineWidth: 2))
+            }
+        }
+    }
+
+    // MARK: - Expanded content
+
+    @ViewBuilder
+    private var expandedContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            switch group {
+            case .reactions(_, let refId, let emojiByActor, let emojiUrlByActor, let zaps, let reposters, _):
+                reactionsExpansion(
+                    refId: refId,
+                    emojiByActor: emojiByActor,
+                    emojiUrlByActor: emojiUrlByActor,
+                    zaps: zaps,
+                    reposters: reposters
+                )
+            case .reply(let id, _, let replyEventId, let refEventId, _, let hints):
+                replyExpansion(groupId: id, replyEventId: replyEventId, refEventId: refEventId, hints: hints)
+            case .quote(let id, _, let actorEventId, let quoteEventId, _, let hints):
+                quoteExpansion(groupId: id, actorEventId: actorEventId, quoteEventId: quoteEventId, hints: hints)
+            case .mention(let id, _, let eventId, _, _):
+                mentionExpansion(groupId: id, eventId: eventId)
+            case .pollVotes(_, let refId, let votersByOptionId, _):
+                pollVotesExpansion(refId: refId, votersByOptionId: votersByOptionId)
+            case .dm:
+                EmptyView()
+            }
+        }
+        .padding(.top, 10)
+        .padding(.leading, 42)
+    }
+
+    private func pollVotesExpansion(refId: String, votersByOptionId: [String: [String]]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            QuotedNoteView(eventId: refId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap)
+            // Resolve option labels from the cached poll event when available.
+            let pollEvent = repo.event(forId: refId)
+            let labelsById: [String: String] = {
+                guard let pollEvent else { return [:] }
+                var out: [String: String] = [:]
+                for opt in Nip88.parsePollOptions(pollEvent) { out[opt.id] = opt.label }
+                return out
+            }()
+            ForEach(votersByOptionId.keys.sorted(), id: \.self) { optionId in
+                let voters = votersByOptionId[optionId] ?? []
+                HStack(spacing: 6) {
+                    Text(labelsById[optionId] ?? optionId)
+                        .font(.subheadline.weight(.medium))
+                    Spacer(minLength: 4)
+                    Text("\(voters.count) vote\(voters.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func reactionsExpansion(
+        refId: String,
+        emojiByActor: [String: String],
+        emojiUrlByActor: [String: String],
+        zaps: [ZapEntry],
+        reposters: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            QuotedNoteView(eventId: refId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap)
+            if !zaps.isEmpty {
+                let total = zaps.reduce(Int64(0)) { $0 + $1.sats }
+                Text("\(NotificationStyle.formatSats(total)) sats from \(zaps.count) zap\(zaps.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(Color.wispZapColor)
+            }
+            if !reposters.isEmpty {
+                Text("\(reposters.count) repost\(reposters.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(Color.wispRepostColor)
+            }
+            if !emojiByActor.isEmpty {
+                let counts = Dictionary(grouping: emojiByActor.values, by: { $0 }).mapValues { $0.count }
+                HStack(spacing: 6) {
+                    ForEach(counts.sorted(by: { $0.value > $1.value }).prefix(6), id: \.key) { entry in
+                        HStack(spacing: 3) {
+                            EmojiInlineView(
+                                emoji: entry.key,
+                                url: urlForEmoji(entry.key, emojiByActor: emojiByActor, emojiUrlByActor: emojiUrlByActor),
+                                height: 14
+                            )
+                            Text("\(entry.value)").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.wispSurfaceVariant.opacity(0.5))
+                        .clipShape(Capsule())
+                    }
+                }
+            }
+        }
+    }
+
+    private func urlForEmoji(
+        _ emoji: String,
+        emojiByActor: [String: String],
+        emojiUrlByActor: [String: String]
+    ) -> String? {
+        for (actor, e) in emojiByActor where e == emoji {
+            if let url = emojiUrlByActor[actor] { return url }
+        }
+        return nil
+    }
+
+    private func replyExpansion(
+        groupId: String,
+        replyEventId: String,
+        refEventId: String?,
+        hints: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let refEventId {
+                Text("replying to your note")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                QuotedNoteView(eventId: refEventId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap)
+            }
+            if let actorEvent = repo.event(forId: replyEventId) {
+                PostCardView(
+                    event: actorEvent,
+                    profile: profiles[actorEvent.pubkey],
+                    profiles: profiles
+                )
+                .padding(.horizontal, -12)
+            }
+            inlineReplyList(groupId: groupId)
+            if let actorEvent = repo.event(forId: replyEventId) {
+                NotificationComposer(
+                    targetEvent: actorEvent,
+                    groupId: groupId,
+                    sending: $sendingReply,
+                    viewModel: viewModel
+                )
+            }
+        }
+    }
+
+    private func quoteExpansion(
+        groupId: String,
+        actorEventId: String,
+        quoteEventId: String,
+        hints: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let actor = repo.event(forId: actorEventId) {
+                PostCardView(
+                    event: actor,
+                    profile: profiles[actor.pubkey],
+                    profiles: profiles
+                )
+                .padding(.horizontal, -12)
+            }
+            if !quoteEventId.isEmpty {
+                Text("quoted your note")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                QuotedNoteView(eventId: quoteEventId, relayHints: hints, profiles: profiles, onProfileTap: onPeerTap)
+            }
+            inlineReplyList(groupId: groupId)
+            if let actor = repo.event(forId: actorEventId) {
+                NotificationComposer(
+                    targetEvent: actor,
+                    groupId: groupId,
+                    sending: $sendingReply,
+                    viewModel: viewModel
+                )
+            }
+        }
+    }
+
+    private func mentionExpansion(groupId: String, eventId: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let actor = repo.event(forId: eventId) {
+                PostCardView(
+                    event: actor,
+                    profile: profiles[actor.pubkey],
+                    profiles: profiles
+                )
+                .padding(.horizontal, -12)
+                inlineReplyList(groupId: groupId)
+                NotificationComposer(
+                    targetEvent: actor,
+                    groupId: groupId,
+                    sending: $sendingReply,
+                    viewModel: viewModel
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func inlineReplyList(groupId: String) -> some View {
+        let optimistic = repo.inlineReplies[groupId] ?? []
+        if !optimistic.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(optimistic, id: \.id) { e in
+                    PostCardView(
+                        event: e,
+                        profile: profiles[e.pubkey] ?? ProfileRepository.shared.get(e.pubkey),
+                        profiles: profiles
+                    )
+                    .padding(.horizontal, -12)
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var rowBackground: some View {
+        Group {
+            if expanded {
+                Color.wispSurfaceVariant.opacity(0.25)
+            } else {
+                Color.clear
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var headline: some View {
+        let actors = primaryActors()
+        let firstName = actors.first.map(displayName) ?? "Someone"
+        switch group {
+        case .reactions(_, _, let emojiByActor, let emojiUrlByActor, let zaps, let reposters, _):
+            if !zaps.isEmpty {
+                let totalSats = zaps.reduce(Int64(0)) { $0 + $1.sats }
+                let suffix = zaps.count == 1
+                    ? "zapped \(NotificationStyle.formatSats(totalSats)) sats"
+                    : "and \(zaps.count - 1) other\(zaps.count == 2 ? "" : "s") zapped \(NotificationStyle.formatSats(totalSats)) sats"
+                Text("\(displayName(zaps[0].pubkey)) \(suffix)")
+            } else if !reposters.isEmpty {
+                let suffix = reposters.count == 1
+                    ? "reposted"
+                    : "and \(reposters.count - 1) other\(reposters.count == 2 ? "" : "s") reposted"
+                Text("\(displayName(reposters[0])) \(suffix)")
+            } else if !emojiByActor.isEmpty {
+                let firstActor = emojiByActor.keys.first ?? ""
+                let emoji = emojiByActor[firstActor] ?? "❤"
+                let url = emojiUrlByActor[firstActor]
+                if emojiByActor.count == 1 {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("\(displayName(firstActor)) reacted")
+                        EmojiInlineView(emoji: emoji, url: url, height: 16)
+                    }
+                } else {
+                    Text("\(displayName(firstActor)) and \(emojiByActor.count - 1) other\(emojiByActor.count == 2 ? "" : "s") reacted")
+                }
+            } else {
+                Text(firstName)
+            }
+        case .reply: Text("\(firstName) replied")
+        case .quote: Text("\(firstName) quoted")
+        case .mention: Text("\(firstName) mentioned you")
+        case .pollVotes(_, _, let map, _):
+            let totalVoters = Set(map.values.flatMap { $0 }).count
+            if totalVoters <= 1 {
+                Text("\(firstName) voted on your poll")
+            } else {
+                Text("\(firstName) and \(totalVoters - 1) other\(totalVoters == 2 ? "" : "s") voted on your poll")
+            }
+        case .dm(_, _, _, _, let unread):
+            if unread > 0 {
+                Text("\(firstName) sent \(unread) message\(unread == 1 ? "" : "s")")
+            } else {
+                Text("\(firstName) messaged you")
+            }
+        }
+    }
+
+    private var referencedSnippet: String? {
+        switch group {
+        case .reply(_, _, let replyEventId, _, _, _):
+            return repo.event(forId: replyEventId)?.content
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ")
+        case .mention(_, _, let eventId, _, _):
+            return repo.event(forId: eventId)?.content
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ")
+        case .quote(_, _, let actorEventId, _, _, _):
+            return repo.event(forId: actorEventId)?.content
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ")
+        case .dm:
+            return nil
+        case .reactions(_, _, _, _, _, _, _):
+            return nil
+        case .pollVotes(_, let refId, _, _):
+            return repo.event(forId: refId)?.content
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ")
+        }
+    }
+
+    private func primaryActors() -> [String] {
+        switch group {
+        case .reactions(_, _, let emojiByActor, _, let zaps, let reposters, _):
+            var ordered: [String] = []
+            for z in zaps where !ordered.contains(z.pubkey) { ordered.append(z.pubkey) }
+            for k in reposters where !ordered.contains(k) { ordered.append(k) }
+            for k in emojiByActor.keys where !ordered.contains(k) { ordered.append(k) }
+            return ordered
+        case .reply(_, let s, _, _, _, _),
+             .quote(_, let s, _, _, _, _),
+             .mention(_, let s, _, _, _):
+            return [s]
+        case .dm(_, let p, _, _, _):
+            return [p]
+        case .pollVotes(_, _, let map, _):
+            var ordered: [String] = []
+            for voters in map.values {
+                for pk in voters where !ordered.contains(pk) { ordered.append(pk) }
+            }
+            return ordered
+        }
+    }
+
+    private func handleTap() {
+        if case .dm(_, _, let convKey, _, _) = group {
+            onDmTap(convKey)
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+    }
+
+    private func displayName(_ pubkey: String) -> String {
+        profiles[pubkey]?.displayString
+            ?? profileRepo.get(pubkey)?.displayString
+            ?? (String(pubkey.prefix(8)) + "…")
+    }
+
+    private func hydrateProfiles() {
+        var dict: [String: ProfileData] = [:]
+        for pk in primaryActors() {
+            if let p = profileRepo.get(pk) { dict[pk] = p }
+        }
+        // Also pull profiles referenced in the actor's event tags so RichContentView has them.
+        switch group {
+        case .reply(_, _, let replyEventId, _, _, _):
+            if let e = repo.event(forId: replyEventId) {
+                for tag in e.tags where tag.first == "p" && tag.count >= 2 {
+                    if let p = profileRepo.get(tag[1]) { dict[tag[1]] = p }
+                }
+            }
+        case .mention(_, _, let eventId, _, _):
+            if let e = repo.event(forId: eventId) {
+                for tag in e.tags where tag.first == "p" && tag.count >= 2 {
+                    if let p = profileRepo.get(tag[1]) { dict[tag[1]] = p }
+                }
+            }
+        default: break
+        }
+        profiles = dict
+    }
+}
+
+/// Inline rendering for a single reaction emoji. Renders the cached bitmap when the URL is
+/// known and loaded; falls back to the literal text (which may be a unicode glyph or the
+/// original `:shortcode:` while loading).
+struct EmojiInlineView: View {
+    let emoji: String
+    let url: String?
+    let height: CGFloat
+    @ObservedObject private var cache = EmojiImageCache.shared
+
+    var body: some View {
+        if let url, !url.isEmpty {
+            if let img = cache.image(for: url) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: height)
+            } else {
+                Color.clear
+                    .frame(width: height, height: height)
+                    .onAppear { cache.ensureLoaded(url) }
+            }
+        } else {
+            Text(emoji).font(.system(size: height))
+        }
+    }
+}

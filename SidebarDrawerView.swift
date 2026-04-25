@@ -1,0 +1,414 @@
+import SwiftUI
+
+struct SidebarDrawerView: View {
+    let profile: ProfileData?
+    let pubkey: String
+    let onClose: () -> Void
+    let onSelectTab: (BottomTab) -> Void
+    let onLogout: () -> Void
+    var onOpenInterface: () -> Void = {}
+    var onOpenDraftsScheduled: () -> Void = {}
+    var onOpenCustomEmojis: () -> Void = {}
+    var onOpenLists: () -> Void = {}
+    var onOpenHashtagSets: () -> Void = {}
+    var onOpenSocialGraph: () -> Void = {}
+    var onOpenSafety: () -> Void = {}
+    var onOpenProofOfWork: () -> Void = {}
+    var onOpenRelays: () -> Void = {}
+    var onOpenMediaServers: () -> Void = {}
+
+    @Environment(AppSettings.self) private var settings
+
+    @State private var settingsExpanded = false
+    @State private var accountsExpanded = false
+    @State private var showLogoutConfirm = false
+    @State private var showQRSheet = false
+    @State private var showStatusEditor = false
+    @State private var statusDraft = ""
+    @State private var userStatus: String? = nil
+    @State private var torEnabled = false
+    @State private var avatarTapCount = 0
+    @State private var avatarTapResetTask: Task<Void, Never>?
+
+    private var hasEmbeddedWallet: Bool { false }
+    private var displayName: String { profile?.displayString ?? truncatedPubkey }
+    private var truncatedPubkey: String {
+        String(pubkey.prefix(8)) + "\u{2026}"
+    }
+    private var npub: String {
+        if let data = Hex.decode(pubkey), let s = Nip19.npubEncode(pubkey: Array(data)) {
+            return s
+        }
+        return pubkey
+    }
+    private var subtitleText: String {
+        if let nip05 = profile?.nip05, !nip05.isEmpty { return nip05 }
+        return String(npub.prefix(16)) + "\u{2026}"
+    }
+    private var versionString: String {
+        let v = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0"
+        return "wisp v\(v)"
+    }
+    private var accounts: [String] { NostrKey.accounts() }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.wispBackground.ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    headerSection
+                        .padding(.top, 16)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
+
+                    if accountsExpanded {
+                        accountPickerSection
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+                        .padding(.bottom, 8)
+
+                    primaryItems
+
+                    if settingsExpanded {
+                        settingsItems
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    Spacer(minLength: 16)
+
+                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+                        .padding(.vertical, 8)
+
+                    logoutButton
+
+                    versionFooter
+                        .padding(.top, 16)
+                        .padding(.bottom, 24)
+                }
+            }
+        }
+        .alert("Logout", isPresented: $showLogoutConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Logout", role: .destructive) { onLogout() }
+        } message: {
+            if hasEmbeddedWallet {
+                Text("Back up your private key before logging out. Without it, your Nostr account cannot be recovered.\n\nBack up your wallet recovery phrase. Without it, your funds cannot be recovered.")
+            } else {
+                Text("Back up your private key before logging out. Without it, your Nostr account cannot be recovered.")
+            }
+        }
+        .alert("Update Status", isPresented: $showStatusEditor) {
+            TextField("What are you up to?", text: $statusDraft)
+            Button("Cancel", role: .cancel) {}
+            if statusDraft.isEmpty {
+                Button("Clear") { userStatus = nil }
+            } else {
+                Button("Update") {
+                    userStatus = statusDraft
+                }
+            }
+        }
+        .sheet(isPresented: $showQRSheet) {
+            qrSheet
+        }
+    }
+
+    // MARK: - Header
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                Button(action: handleAvatarTap) {
+                    CachedAvatarView(url: profile?.picture, size: 64, alwaysLoad: true)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Button {
+                        torEnabled.toggle()
+                    } label: {
+                        Image(systemName: "shield.lefthalf.filled")
+                            .font(.system(size: 20))
+                            .foregroundStyle(torEnabled ? Color.wispPrimary : .secondary.opacity(0.5))
+                            .frame(width: 36, height: 36)
+                    }
+
+                    Button {
+                        @Bindable var s = settings
+                        s.colorScheme = (settings.colorScheme == .dark) ? .light : .dark
+                    } label: {
+                        Image(systemName: settings.colorScheme == .dark ? "moon.fill" : "sun.max.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 36)
+                    }
+
+                    Button {
+                        showQRSheet = true
+                    } label: {
+                        Image(systemName: "qrcode")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 36)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    EmojiText(
+                        displayName,
+                        emojiMap: profile?.emojiMap ?? [:],
+                        textStyle: .body,
+                        weight: .semibold,
+                        color: .label,
+                        lineLimit: 1
+                    )
+
+                    Button {
+                        accountsExpanded.toggle()
+                    } label: {
+                        Image(systemName: accountsExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(subtitleText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Button {
+                statusDraft = userStatus ?? ""
+                showStatusEditor = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: userStatus == nil ? 14 : 12))
+                        .foregroundStyle(.secondary)
+                    Text(userStatus ?? "Set status\u{2026}")
+                        .font(.system(size: 12).italic())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func handleAvatarTap() {
+        avatarTapCount += 1
+        if avatarTapCount >= 7 {
+            fatalError("Test crash")
+        }
+        avatarTapResetTask?.cancel()
+        avatarTapResetTask = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled {
+                avatarTapCount = 0
+            }
+        }
+    }
+
+    // MARK: - Account picker
+
+    private var accountPickerSection: some View {
+        VStack(spacing: 0) {
+            ForEach(accounts, id: \.self) { acctPubkey in
+                Button {
+                    accountsExpanded = false
+                } label: {
+                    HStack(spacing: 12) {
+                        CachedAvatarView(url: nil, size: 32)
+                        Text(String(acctPubkey.prefix(12)) + "\u{2026}")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if acctPubkey == pubkey {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.wispPrimary)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                accountsExpanded = false
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                    Text("Add Account")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.bottom, 8)
+    }
+
+    // MARK: - Primary items
+
+    private var primaryItems: some View {
+        VStack(spacing: 0) {
+            DrawerRow(icon: "person", label: "My Profile") {
+                onClose()
+            }
+            DrawerRow(icon: "house", label: "Feeds") {
+                onSelectTab(.home)
+            }
+            DrawerRow(icon: "magnifyingglass", label: "Search") {
+                onSelectTab(.search)
+            }
+            DrawerRow(icon: "envelope", label: "Messages") {
+                onSelectTab(.messages)
+            }
+            DrawerRow(icon: "bolt.fill", label: "Wallet") {
+                onSelectTab(.wallet)
+            }
+            DrawerRow(icon: "list.bullet", label: "Lists") {
+                onOpenLists()
+            }
+            DrawerRow(icon: "number.square", label: "Hashtag Sets") {
+                onOpenHashtagSets()
+            }
+            DrawerRow(icon: "pencil", label: "Drafts & Scheduled") {
+                onOpenDraftsScheduled()
+            }
+            DrawerRow(
+                icon: "gearshape",
+                label: "Settings",
+                trailingChevron: settingsExpanded ? .expanded : .collapsed
+            ) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    settingsExpanded.toggle()
+                }
+            }
+        }
+    }
+
+    // MARK: - Settings items
+
+    private var settingsItems: some View {
+        VStack(spacing: 0) {
+            DrawerRow(icon: "paintbrush", label: "Interface", indented: true) {
+                onOpenInterface()
+            }
+            DrawerRow(icon: "server.rack", label: "Relays", indented: true) { onOpenRelays() }
+            DrawerRow(icon: "cloud", label: "Media Servers", indented: true) { onOpenMediaServers() }
+            DrawerRow(icon: "key", label: "Keys", indented: true) { onClose() }
+            DrawerRow(icon: "hand.raised", label: "Safety", indented: true) { onOpenSafety() }
+            DrawerRow(icon: "shield", label: "Proof of Work", indented: true) { onOpenProofOfWork() }
+            DrawerRow(icon: "point.3.connected.trianglepath.dotted", label: "Social Graph", indented: true) { onOpenSocialGraph() }
+            DrawerRow(icon: "face.smiling", label: "Custom Emojis", indented: true) {
+                onOpenCustomEmojis()
+            }
+            DrawerRow(icon: "heart", label: "Relay Health", indented: true) { onClose() }
+            DrawerRow(icon: "ladybug", label: "Console", indented: true) { onClose() }
+        }
+    }
+
+    // MARK: - Logout & version
+
+    private var logoutButton: some View {
+        DrawerRow(
+            icon: "rectangle.portrait.and.arrow.right",
+            label: "Logout",
+            tint: .red
+        ) {
+            showLogoutConfirm = true
+        }
+    }
+
+    private var versionFooter: some View {
+        HStack(spacing: 6) {
+            Image("WispLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
+                .opacity(0.3)
+            Text(versionString)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - QR sheet
+
+    @State private var qrTab: Int = 0
+
+    private var qrSheet: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Text("Profile QR")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { showQRSheet = false }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+
+            if (profile?.lud16) != nil {
+                Picker("", selection: $qrTab) {
+                    Text("Nostr").tag(0)
+                    Text("Lightning").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 20)
+            }
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.wispSurface)
+                    .frame(width: 240, height: 240)
+                Image(systemName: "qrcode")
+                    .font(.system(size: 200))
+                    .foregroundStyle(.secondary.opacity(0.6))
+            }
+            .padding(.vertical, 8)
+
+            Text(qrTab == 0 ? npub : (profile?.lud16 ?? ""))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 24)
+
+            Button {
+                UIPasteboard.general.string = qrTab == 0 ? npub : (profile?.lud16 ?? "")
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+                    .font(.system(size: 14, weight: .medium))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+                    .background(Color.wispSurfaceVariant, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.wispBackground)
+        .presentationDetents([.medium, .large])
+    }
+}

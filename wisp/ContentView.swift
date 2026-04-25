@@ -1,21 +1,71 @@
-//
-//  ContentView.swift
-//  wisp
-//
-//  Created by Barry Deeb on 2026-04-24.
-//
-
 import SwiftUI
 
+enum AppScreen {
+    case splash
+    case loading
+    case onboarding
+    case main
+}
+
 struct ContentView: View {
+    @State private var currentScreen: AppScreen = .splash
+    @State private var showLogin = false
+    @State private var keypair: Keypair?
+    @State private var checkedSavedAccount = false
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        Group {
+            switch currentScreen {
+            case .splash:
+                SplashView(
+                    onSignUp: {
+                        // TODO: Navigate to account creation
+                    },
+                    onLogIn: {
+                        showLogin = true
+                    }
+                )
+                .sheet(isPresented: $showLogin) {
+                    LoginView { kp in
+                        keypair = kp
+                        showLogin = false
+                        currentScreen = .onboarding
+                    }
+                }
+
+            case .loading:
+                LoadingView {
+                    withAnimation { currentScreen = .main }
+                }
+
+            case .onboarding:
+                if let keypair {
+                    OnboardingView(keypair: keypair) {
+                        withAnimation { currentScreen = .main }
+                    }
+                }
+
+            case .main:
+                if let keypair {
+                    MainView(keypair: keypair) {
+                        self.keypair = nil
+                        currentScreen = .splash
+                    }
+                }
+            }
         }
-        .padding()
+        .onAppear {
+            guard !checkedSavedAccount else { return }
+            checkedSavedAccount = true
+            if let saved = NostrKey.load() {
+                keypair = saved
+                if NostrKey.isOnboardingComplete(pubkey: saved.pubkey) {
+                    currentScreen = .loading
+                } else {
+                    currentScreen = .onboarding
+                }
+            }
+        }
     }
 }
 

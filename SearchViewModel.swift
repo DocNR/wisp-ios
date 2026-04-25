@@ -1,0 +1,445 @@
+import Foundation
+import Observation
+
+@Observable
+@MainActor
+final class SearchViewModel {
+    let keypair: Keypair
+
+    enum Mode: String { case notes, people }
+    enum RelayOption: String { case `default`, all, individual }
+
+    // MARK: - Inputs
+
+    var query: String = ""
+    var mode: Mode = .notes
+    var showAdvanced: Bool = false
+
+    var relayOption: RelayOption = .default
+    var selectedRelayUrl: String?
+    var savedSearchRelays: [String] = []
+
+    var authorFilter: ProfileData?
+    var authorQuery: String = ""
+
+    // MARK: - Outputs
+
+    var notes: [NostrEvent] = []
+    var noteProfiles: [String: ProfileData] = [:]
+    var people: [ProfileData] = []
+    var authorResults: [ProfileData] = []
+
+    var engagement: [String: EngagementCounts] = [:]
+    var isSearching = false
+    var isAuthorSearching = false
+    var hasSearched = false
+
+    // MARK: - Internals
+
+    @ObservationIgnored private let profileRepo = ProfileRepository.shared
+    @ObservationIgnored private var debounceTask: Task<Void, Never>?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var authorDebounceTask: Task<Void, Never>?
+    @ObservationIgnored private var authorSearchTask: Task<Void, Never>?
+    @ObservationIgnored private var searchCounter: Int = 0
+    @ObservationIgnored private var authorCounter: Int = 0
+
+    static let defaultSearchRelay = "wss://search.nostrarchives.com"
+
+    private static let indexerRelays = [
+        "wss://indexer.nostrarchives.com",
+        "wss://indexer.coracle.social",
+        "wss://relay.damus.io",
+        "wss://relay.primal.net"
+    ]
+
+    private static let engagementFallbackRelays = ["wss://relay.damus.io"]
+
+    private let searchTimeout: TimeInterval = 5
+    private let engagementTimeout: TimeInterval = 10
+    private let authorTimeout: TimeInterval = 4
+
+    // MARK: - Lifecycle
+
+    init(keypair: Keypair) {
+        self.keypair = keypair
+    }
+
+    func start() {
+        loadPreferences()
+    }
+
+    func stop() {
+        debounceTask?.cancel()
+        searchTask?.cancel()
+        authorDebounceTask?.cancel()
+        authorSearchTask?.cancel()
+    }
+
+    // MARK: - Persistence
+
+    private func loadPreferences() {
+        let pk = keypair.pubkey
+        let opt = UserDefaults.standard.string(forKey: "search_relay_option_\(pk)") ?? "default"
+        relayOption = RelayOption(rawValue: opt) ?? .default
+        selectedRelayUrl = UserDefaults.standard.string(forKey: "search_relay_url_\(pk)")
+        savedSearchRelays = UserDefaults.standard.stringArray(forKey: "search_relays_\(pk)") ?? []
+    }
+
+    private func savePreferences() {
+        let pk = keypair.pubkey
+        UserDefaults.standard.set(relayOption.rawValue, forKey: "search_relay_option_\(pk)")
+        if let url = selectedRelayUrl {
+            UserDefaults.standard.set(url, forKey: "search_relay_url_\(pk)")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "search_relay_url_\(pk)")
+        }
+        UserDefaults.standard.set(savedSearchRelays, forKey: "search_relays_\(pk)")
+    }
+
+    // MARK: - Inputs
+
+    func updateQuery(_ text: String) {
+        query = text
+        debounceTask?.cancel()
+        let trimmed = preprocess(text)
+        guard trimmed.count >= 2 else {
+            // Clear results once query becomes too short
+            if trimmed.isEmpty {
+                notes = []
+                people = []
+                noteProfiles = [:]
+                engagement = [:]
+                hasSearched = false
+            }
+            return
+        }
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            self.runSearch()
+        }
+    }
+
+    func setMode(_ newMode: Mode) {
+        guard mode != newMode else { return }
+        mode = newMode
+        // Re-run if there's an active query
+        if preprocess(query).count >= 2 {
+            runSearch()
+        }
+    }
+
+    func setRelayOption(_ option: RelayOption, url: String? = nil) {
+        relayOption = option
+        if option == .individual {
+            selectedRelayUrl = url ?? selectedRelayUrl
+        }
+        savePreferences()
+        if preprocess(query).count >= 2 {
+            runSearch()
+        }
+    }
+
+    func addCustomRelay(_ url: String) {
+        let normalized = normalizeRelayUrl(url)
+        guard !normalized.isEmpty else { return }
+        if !savedSearchRelays.contains(normalized) {
+            savedSearchRelays.append(normalized)
+        }
+        selectedRelayUrl = normalized
+        relayOption = .individual
+        savePreferences()
+    }
+
+    func removeCustomRelay(_ url: String) {
+        savedSearchRelays.removeAll { $0 == url }
+        if selectedRelayUrl == url {
+            selectedRelayUrl = nil
+            if relayOption == .individual { relayOption = .default }
+        }
+        savePreferences()
+    }
+
+    func setAuthorFilter(_ profile: ProfileData?) {
+        authorFilter = profile
+        authorResults = []
+        authorQuery = ""
+        if mode == .notes, preprocess(query).count >= 2 {
+            runSearch()
+        }
+    }
+
+    func updateAuthorQuery(_ text: String) {
+        authorQuery = text
+        authorDebounceTask?.cancel()
+        let trimmed = preprocess(text)
+        guard trimmed.count >= 2 else {
+            authorResults = []
+            return
+        }
+        authorDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled else { return }
+            self.runAuthorSearch(trimmed)
+        }
+    }
+
+    // MARK: - Search
+
+    func runSearch() {
+        let trimmed = preprocess(query)
+        guard !trimmed.isEmpty else { return }
+
+        searchCounter += 1
+        let myCounter = searchCounter
+        let relays = relaysToQuery()
+        guard !relays.isEmpty else {
+            isSearching = false
+            return
+        }
+        let mode = self.mode
+        let authorPubkey = (mode == .notes) ? authorFilter?.pubkey : nil
+
+        searchTask?.cancel()
+        isSearching = true
+        hasSearched = true
+        if mode == .notes {
+            notes = []
+            engagement = [:]
+            noteProfiles = [:]
+        } else {
+            people = []
+        }
+
+        let filter: NostrFilter
+        switch mode {
+        case .people:
+            filter = NostrFilter(kinds: [0], limit: 20, search: trimmed)
+        case .notes:
+            filter = NostrFilter(
+                kinds: [1],
+                authors: authorPubkey.map { [$0] },
+                limit: 50,
+                search: trimmed
+            )
+        }
+
+        let timeout = searchTimeout
+        searchTask = Task { [weak self] in
+            let events = await RelayPool.query(relays: relays, filter: filter, timeout: timeout)
+            guard let self else { return }
+            await MainActor.run {
+                guard myCounter == self.searchCounter else { return }
+                switch mode {
+                case .people:
+                    self.handlePeopleResults(events)
+                case .notes:
+                    self.handleNoteResults(events)
+                }
+                self.isSearching = false
+            }
+        }
+    }
+
+    private func handlePeopleResults(_ events: [NostrEvent]) {
+        var seen = Set<String>()
+        var results: [ProfileData] = []
+        for event in events where event.kind == 0 {
+            guard seen.insert(event.pubkey).inserted else { continue }
+            if let profile = profileRepo.updateFromEvent(event) {
+                results.append(profile)
+            } else {
+                results.append(ProfileData(pubkey: event.pubkey))
+            }
+        }
+        let follows = Set(UserDefaults.standard.stringArray(forKey: "follow_pubkeys_\(keypair.pubkey)") ?? [])
+        results.sort { lhs, rhs in
+            let lf = follows.contains(lhs.pubkey)
+            let rf = follows.contains(rhs.pubkey)
+            if lf != rf { return lf && !rf }
+            return false
+        }
+        people = results
+    }
+
+    private func handleNoteResults(_ events: [NostrEvent]) {
+        var seen = Set<String>()
+        var ordered: [NostrEvent] = []
+        for event in events where event.kind == 1 {
+            if seen.insert(event.id).inserted {
+                ordered.append(event)
+            }
+        }
+        notes = ordered
+
+        // Seed profiles from cache so names/avatars render immediately.
+        var seedProfiles: [String: ProfileData] = [:]
+        for pubkey in Set(ordered.map(\.pubkey)) {
+            if let p = profileRepo.get(pubkey) {
+                seedProfiles[pubkey] = p
+            }
+        }
+        noteProfiles = seedProfiles
+
+        let ids = ordered.map(\.id)
+        let missingPubkeys = Set(ordered.map(\.pubkey)).filter { noteProfiles[$0] == nil }
+        Task { [weak self] in
+            await self?.loadEngagement(for: ids)
+        }
+        if !missingPubkeys.isEmpty {
+            Task { [weak self] in
+                await self?.loadAuthorProfiles(for: Array(missingPubkeys))
+            }
+        }
+    }
+
+    // MARK: - Engagement
+
+    private func loadEngagement(for ids: [String]) async {
+        guard !ids.isEmpty else { return }
+        let relays = engagementRelays()
+        let kinds = [1, 6, 7, 9735]
+        let chunks = ids.chunked(into: 200)
+        let timeout = engagementTimeout
+        await withTaskGroup(of: [NostrEvent].self) { group in
+            for chunk in chunks {
+                group.addTask {
+                    await RelayPool.query(
+                        relays: relays,
+                        filter: NostrFilter(kinds: kinds, eTags: chunk, limit: 500),
+                        timeout: timeout
+                    )
+                }
+            }
+            for await batch in group {
+                ingestEngagement(batch)
+            }
+        }
+    }
+
+    private func ingestEngagement(_ events: [NostrEvent]) {
+        for event in events {
+            guard let target = event.tags.first(where: { $0.first == "e" && $0.count >= 2 })?[1] else { continue }
+            var current = engagement[target] ?? EngagementCounts()
+            switch event.kind {
+            case 1:
+                current.replies += 1
+            case 6:
+                current.reposts += 1
+            case 7:
+                current.reactions += 1
+            case 9735:
+                if let bolt = event.tags.first(where: { $0.first == "bolt11" && $0.count >= 2 })?[1],
+                   let decoded = Bolt11.decode(bolt),
+                   let sats = decoded.amountSats {
+                    current.zapSats += sats
+                    current.zapCount += 1
+                } else {
+                    current.zapCount += 1
+                }
+            default: break
+            }
+            engagement[target] = current
+        }
+    }
+
+    // MARK: - Profiles
+
+    private func loadAuthorProfiles(for pubkeys: [String]) async {
+        guard !pubkeys.isEmpty else { return }
+        let relays = Self.indexerRelays
+        let timeout: TimeInterval = 6
+        await withTaskGroup(of: [NostrEvent].self) { group in
+            for chunk in pubkeys.chunked(into: 150) {
+                group.addTask {
+                    await RelayPool.query(
+                        relays: relays,
+                        filter: NostrFilter(kinds: [0], authors: chunk, limit: chunk.count),
+                        timeout: timeout
+                    )
+                }
+            }
+            for await batch in group {
+                for event in batch where event.kind == 0 {
+                    if let profile = profileRepo.updateFromEvent(event) {
+                        noteProfiles[profile.pubkey] = profile
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Author autocomplete
+
+    private func runAuthorSearch(_ trimmed: String) {
+        authorCounter += 1
+        let myCounter = authorCounter
+        let relays = relaysToQuery()
+        guard !relays.isEmpty else { return }
+        isAuthorSearching = true
+        authorSearchTask?.cancel()
+        let timeout = authorTimeout
+        authorSearchTask = Task { [weak self] in
+            let events = await RelayPool.query(
+                relays: relays,
+                filter: NostrFilter(kinds: [0], limit: 10, search: trimmed),
+                timeout: timeout
+            )
+            guard let self else { return }
+            await MainActor.run {
+                guard myCounter == self.authorCounter else { return }
+                var seen = Set<String>()
+                var results: [ProfileData] = []
+                for event in events where event.kind == 0 {
+                    guard seen.insert(event.pubkey).inserted else { continue }
+                    if let profile = self.profileRepo.updateFromEvent(event) {
+                        results.append(profile)
+                    } else {
+                        results.append(ProfileData(pubkey: event.pubkey))
+                    }
+                }
+                self.authorResults = Array(results.prefix(10))
+                self.isAuthorSearching = false
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func relaysToQuery() -> [String] {
+        switch relayOption {
+        case .default:
+            return [Self.defaultSearchRelay]
+        case .all:
+            let combined = ([Self.defaultSearchRelay] + savedSearchRelays).reduce(into: [String]()) { acc, url in
+                if !acc.contains(url) { acc.append(url) }
+            }
+            return combined.isEmpty ? [Self.defaultSearchRelay] : combined
+        case .individual:
+            if let url = selectedRelayUrl, !url.isEmpty { return [url] }
+            return [Self.defaultSearchRelay]
+        }
+    }
+
+    private func engagementRelays() -> [String] {
+        if let board = RelayScoreBoard.load(pubkey: keypair.pubkey) {
+            let top = board.scoredRelays.prefix(20).map(\.url)
+            if !top.isEmpty { return top }
+        }
+        return Self.engagementFallbackRelays
+    }
+
+    private func preprocess(_ text: String) -> String {
+        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.lowercased().hasPrefix("nostr:") { s = String(s.dropFirst("nostr:".count)) }
+        return s
+    }
+
+    private func normalizeRelayUrl(_ url: String) -> String {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if trimmed.hasPrefix("wss://") || trimmed.hasPrefix("ws://") { return trimmed }
+        return "wss://" + trimmed
+    }
+}
