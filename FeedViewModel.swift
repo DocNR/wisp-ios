@@ -394,17 +394,18 @@ final class FeedViewModel {
         }
     }
 
-    /// Mirrors Android `RelayPool.MAX_PERSISTENT` — pool size cap.
-    private static let maxPoolRelays = 30
+    /// Pool cap. Android observes ~72 connections for a similar follow base; the
+    /// underlying `MAX_PERSISTENT = 30` constant is a soft floor — once you add
+    /// pinned + extended-network + indexer ephemerals the live count lands here.
+    private static let maxPoolRelays = 72
     /// Mirrors Android `OutboxRouter.MAX_AUTHORS_PER_FILTER` — relays reject REQs with too-large filters.
     private static let maxAuthorsPerFilter = 200
 
     private func loadFeed(follows: [String], scoreBoard: RelayScoreBoard?, since: Int?) async {
         guard let board = scoreBoard, !follows.isEmpty else { return }
 
-        // 1. Pool: top-N connectable scored relays. Filter drops .onion/localhost/IPs/etc.
-        //    Cap matches Android's MAX_PERSISTENT — coverage past the top 30 is marginal
-        //    and the indexer safety net catches anyone the pool misses.
+        // 1. Pool: top-N connectable scored relays. URL filter drops .onion/localhost/IPs.
+        //    Scoreboard is already canonicalized, so no per-call dedup needed.
         let pool = board.scoredRelays
             .filter { RelayUrlValidator.isConnectable($0.url) }
             .prefix(Self.maxPoolRelays)
@@ -412,20 +413,33 @@ final class FeedViewModel {
         let poolSet = Set(pool)
 
         // 2. Per-author routing: each author lands on the pool relays they write to.
+        //    Track fallback authors separately so we can route them to indexers (smaller
+        //    than full follow list — indexers don't get hammered with 1500 author REQs).
         var relayToAuthors: [String: Set<String>] = [:]
+        var fallbackAuthors: [String] = []
         for author in follows {
-            let authorWriteRelays = board.authorRelays[author] ?? []
-            let eligible = authorWriteRelays.intersection(poolSet)
-            for url in eligible {
-                relayToAuthors[url, default: []].insert(author)
+            let writeRelays = board.authorRelays[author] ?? []
+            let eligible = writeRelays.intersection(poolSet)
+            if eligible.isEmpty {
+                fallbackAuthors.append(author)
+            } else {
+                for url in eligible {
+                    relayToAuthors[url, default: []].insert(author)
+                }
             }
         }
 
-        // 3. Indexer safety net: each indexer relay receives the full follow list.
-        //    Catches authors whose write relays all fell outside the pool.
-        let allFollows = Set(follows)
-        for url in Self.indexerRelays where RelayUrlValidator.isConnectable(url) {
-            relayToAuthors[url] = allFollows
+        // 3. Distribute fallback authors round-robin across indexer relays. Each
+        //    indexer ends up with ~fallback/4 authors instead of every indexer
+        //    receiving the entire follow list (Android's observable behavior:
+        //    no relay holds more than a few hundred npubs).
+        let indexers = Self.indexerRelays.compactMap { RelayUrlValidator.canonicalize($0) }
+                                          .filter { RelayUrlValidator.isConnectable($0) }
+        if !fallbackAuthors.isEmpty && !indexers.isEmpty {
+            for (i, author) in fallbackAuthors.enumerated() {
+                let url = indexers[i % indexers.count]
+                relayToAuthors[url, default: []].insert(author)
+            }
         }
 
         // 4. Build one REQ per relay (multi-filter when authors > 200) — at most one socket per host.
