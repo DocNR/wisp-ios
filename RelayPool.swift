@@ -34,14 +34,21 @@ enum RelayPool {
     }
 
     /// Handle an incoming `["AUTH", challenge]` frame. If the relay is pre-approved,
-    /// sign and send back an AUTH response immediately. Returns the challenge so
-    /// callers can stash it for later auth-required rejection handling.
+    /// sign and send back an AUTH response immediately. Returns `true` only when an
+    /// AUTH event was actually signed and sent — callers use this to know whether to
+    /// replay their original REQ/EVENT (some relays drop the pre-AUTH frame).
+    @discardableResult
     fileprivate static func respondToAuthChallenge(challenge: String, urlString: String,
-                                                   ws: URLSessionWebSocketTask) async {
+                                                   ws: URLSessionWebSocketTask) async -> Bool {
         guard authApprovalCheck?(urlString) == true,
-              let event = authSigner?(urlString, challenge) else { return }
+              let event = authSigner?(urlString, challenge) else { return false }
         let payload = "[\"AUTH\",\(event.toJSON())]"
-        try? await ws.send(.string(payload))
+        do {
+            try await ws.send(.string(payload))
+            return true
+        } catch {
+            return false
+        }
     }
 
     static func query(
@@ -98,6 +105,7 @@ enum RelayPool {
         }
 
         var lastChallenge: String?
+        var didResendAfterAuth = false
         let urlString = url.absoluteString
 
         while !Task.isCancelled {
@@ -121,7 +129,12 @@ enum RelayPool {
                     break
                 } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
                     lastChallenge = challenge
-                    await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                    let didAuth = await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                    // AUTH-required relays drop the pre-auth REQ. Replay it once on this socket.
+                    if didAuth, !didResendAfterAuth {
+                        didResendAfterAuth = true
+                        try? await ws.send(.string(req))
+                    }
                 } else if type == "CLOSED", arr.count >= 3,
                           let reason = arr[2] as? String,
                           reason.lowercased().contains("auth-required") {
@@ -269,6 +282,7 @@ extension RelayPool {
         }
 
         var lastChallenge: String?
+        var didResendAfterAuth = false
         let urlString = url.absoluteString
 
         while !Task.isCancelled {
@@ -293,7 +307,11 @@ extension RelayPool {
                     break
                 } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
                     lastChallenge = challenge
-                    await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                    let didAuth = await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                    if didAuth, !didResendAfterAuth {
+                        didResendAfterAuth = true
+                        try? await ws.send(.string(req))
+                    }
                 } else if type == "CLOSED", arr.count >= 3,
                           let reason = arr[2] as? String,
                           reason.lowercased().contains("auth-required") {
@@ -401,6 +419,7 @@ extension RelayPool {
 
                     var serverClosed = false
                     var lastChallenge: String?
+                    var didResendAfterAuth = false
                     let urlString = url.absoluteString
                     inner: while !Task.isCancelled {
                         do {
@@ -427,7 +446,99 @@ extension RelayPool {
                                 break inner
                             } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
                                 lastChallenge = challenge
-                                await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                                let didAuth = await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                                if didAuth, !didResendAfterAuth {
+                                    didResendAfterAuth = true
+                                    try? await ws.send(.string(req))
+                                }
+                            }
+                            // EOSE intentionally ignored: keep listening for live events.
+                        } catch {
+                            break inner
+                        }
+                    }
+
+                    if Task.isCancelled {
+                        try? await ws.send(.string(closeMsg))
+                        ws.cancel(with: .normalClosure, reason: nil)
+                        break outer
+                    }
+                    ws.cancel(with: .normalClosure, reason: nil)
+                    if serverClosed { break outer }
+
+                    let delay = min(30.0, pow(2.0, Double(attempt)))
+                    attempt += 1
+                    try? await Task.sleep(for: .seconds(delay))
+                }
+            }
+            sub.add(listener: task)
+        }
+        return sub
+    }
+
+    /// Persistent variant of `stream` for outbox-routed feeds. Opens one socket per
+    /// `RelayQuery`, sends a multi-filter REQ (so a relay with >200 routed authors
+    /// gets one connection and one REQ, not N), keeps the socket alive after EOSE,
+    /// and auto-reconnects on transient errors. The home feed uses this so new
+    /// notes flow in continuously after the initial backlog finishes streaming.
+    static func subscribe(queries: [RelayQuery], id: String) -> RelaySubscription {
+        let sub = RelaySubscription(id: id)
+        let closeMsg = "[\"CLOSE\",\"\(id)\"]"
+        for query in queries {
+            guard !query.filters.isEmpty,
+                  let url = URL(string: query.relayUrl) else { continue }
+            let filterJoined = query.filters.map { $0.toJSON() }.joined(separator: ",")
+            let req = "[\"REQ\",\"\(id)\",\(filterJoined)]"
+            let task = Task {
+                var attempt = 0
+                outer: while !Task.isCancelled {
+                    let session = URLSession(configuration: .default)
+                    let ws = session.webSocketTask(with: url)
+                    ws.resume()
+
+                    do { try await ws.send(.string(req)) } catch {
+                        ws.cancel(with: .normalClosure, reason: nil)
+                        if Task.isCancelled { break outer }
+                        let delay = min(30.0, pow(2.0, Double(attempt)))
+                        attempt += 1
+                        try? await Task.sleep(for: .seconds(delay))
+                        continue
+                    }
+
+                    var serverClosed = false
+                    var lastChallenge: String?
+                    var didResendAfterAuth = false
+                    let urlString = url.absoluteString
+                    inner: while !Task.isCancelled {
+                        do {
+                            let msg = try await ws.receive()
+                            guard case .string(let text) = msg else { continue }
+                            guard let data = text.data(using: .utf8),
+                                  let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+                                  let type = arr.first as? String else { continue }
+                            if type == "EVENT", arr.count >= 3,
+                               let obj = arr[2] as? [String: Any],
+                               let event = NostrEvent(json: obj) {
+                                attempt = 0
+                                let eid = event.id
+                                await MainActor.run {
+                                    NoteSourceTracker.shared.record(eventId: eid, relayUrl: urlString)
+                                }
+                                await sub.deliver(event: event, relayUrl: urlString)
+                            } else if type == "CLOSED" {
+                                let reason = (arr.count >= 3 ? (arr[2] as? String ?? "") : "").lowercased()
+                                if reason.contains("auth-required"), let challenge = lastChallenge {
+                                    emitPendingAuth(url: urlString, challenge: challenge)
+                                }
+                                serverClosed = true
+                                break inner
+                            } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
+                                lastChallenge = challenge
+                                let didAuth = await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                                if didAuth, !didResendAfterAuth {
+                                    didResendAfterAuth = true
+                                    try? await ws.send(.string(req))
+                                }
                             }
                             // EOSE intentionally ignored: keep listening for live events.
                         } catch {
@@ -479,6 +590,7 @@ extension RelayPool {
                     }
                     do { try await ws.send(.string(payload)) } catch { return nil }
                     var lastChallenge: String?
+                    var didResendAfterAuth = false
                     let urlString = url.absoluteString
                     while !Task.isCancelled {
                         do {
@@ -499,7 +611,12 @@ extension RelayPool {
                                     return nil
                                 } else if type == "AUTH", arr.count >= 2, let challenge = arr[1] as? String {
                                     lastChallenge = challenge
-                                    await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                                    let didAuth = await respondToAuthChallenge(challenge: challenge, urlString: urlString, ws: ws)
+                                    // AUTH-required relays drop the pre-auth EVENT. Replay once.
+                                    if didAuth, !didResendAfterAuth {
+                                        didResendAfterAuth = true
+                                        try? await ws.send(.string(payload))
+                                    }
                                 }
                             }
                         } catch { return nil }

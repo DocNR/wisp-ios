@@ -37,7 +37,7 @@ final class RelaySettingsRepository {
 
     /// Indexer fallback set for *publishing* list metadata. Mirrors Android's
     /// `DEFAULT_INDEXER_RELAYS` so cross-client visibility matches.
-    private static let indexerRelays = [
+    static let indexerRelays = [
         "wss://indexer.coracle.social",
         "wss://relay.nos.social",
         "wss://nos.lol",
@@ -47,6 +47,14 @@ final class RelaySettingsRepository {
     ]
 
     // MARK: - Lifecycle
+
+    /// Idempotent — returns immediately once UserDefaults hydration has run for this pubkey.
+    /// Callers that need the disk-cached `dmRelays` etc. should `await` this before reading.
+    func ensureLoaded(pubkey: String) {
+        if loadedFor == pubkey { return }
+        loadFromDefaults(pubkey: pubkey)
+        loadedFor = pubkey
+    }
 
     /// Hydrate from UserDefaults for the given pubkey, then async-merge from relays.
     func bootstrap(keypair: Keypair) async {
@@ -329,8 +337,11 @@ final class RelaySettingsRepository {
         let now = Int(Date().timeIntervalSince1970)
         dmUpdatedAt = max(dmUpdatedAt + 1, now)
         let tags = Nip51Lists.buildRelaySetListTags(dmRelays)
+        // Also send the announcement to the DM relays themselves, so peers querying any of
+        // those inboxes can resolve the latest list (matches Android's sendToDmRelays).
         publish(kind: Nip51Lists.kindDmRelays, tags: tags,
-                createdAt: dmUpdatedAt, privkey: privkey, keypair: keypair)
+                createdAt: dmUpdatedAt, privkey: privkey, keypair: keypair,
+                extraRelays: dmRelays)
         saveDm(pubkey: keypair.pubkey)
     }
 
@@ -355,9 +366,10 @@ final class RelaySettingsRepository {
     }
 
     private func publish(kind: Int, tags: [[String]], createdAt: Int,
-                         privkey: Data, keypair: Keypair) {
+                         privkey: Data, keypair: Keypair,
+                         extraRelays: [String] = []) {
         let pubkey = keypair.pubkey
-        let relays = topWriteRelays(pubkey: pubkey) + Self.indexerRelays
+        let relays = Array(Set(topWriteRelays(pubkey: pubkey) + Self.indexerRelays + extraRelays))
         Task.detached {
             guard let event = try? NostrEvent.sign(
                 privkey32: privkey,

@@ -66,6 +66,9 @@ struct MessagesView: View {
         .onAppear {
             viewModel.refreshSnapshot()
             viewModel.markAllRead()
+            // Idempotent — start() guards on `subscription == nil`, so this only does work
+            // after MainView.onDisappear has torn the subscription down.
+            Task { await viewModel.start() }
         }
     }
 

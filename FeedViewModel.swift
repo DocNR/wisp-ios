@@ -116,9 +116,11 @@ final class FeedViewModel {
         let newestStored = await eventStore.newestTimestamp()
         let since = calculateSince(newestStored: newestStored, followCount: follows.count)
 
-        // 3. Fetch user profile + new events from relays
+        // 3. Fetch user profile, then start the persistent follow-feed subscription.
+        //    loadFeed kicks off long-lived sockets and returns immediately — events
+        //    flow into `self.events` from the consumer Task.
         await loadUserProfile()
-        await loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)
+        loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)
         await loadMissingProfiles()
 
         isLoading = false
@@ -145,7 +147,7 @@ final class FeedViewModel {
             since = await eventStore.newestTimestamp()
         }
 
-        await loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)
+        loadFeed(follows: follows, scoreBoard: scoreBoard, since: since)
         await loadMissingProfiles()
 
         if let newest = events.first {
@@ -401,7 +403,7 @@ final class FeedViewModel {
     /// Mirrors Android `OutboxRouter.MAX_AUTHORS_PER_FILTER` — relays reject REQs with too-large filters.
     private static let maxAuthorsPerFilter = 200
 
-    private func loadFeed(follows: [String], scoreBoard: RelayScoreBoard?, since: Int?) async {
+    private func loadFeed(follows: [String], scoreBoard: RelayScoreBoard?, since: Int?) {
         guard let board = scoreBoard, !follows.isEmpty else { return }
 
         // 1. Pool: top-N connectable scored relays. URL filter drops .onion/localhost/IPs.
@@ -413,8 +415,6 @@ final class FeedViewModel {
         let poolSet = Set(pool)
 
         // 2. Per-author routing: each author lands on the pool relays they write to.
-        //    Track fallback authors separately so we can route them to indexers (smaller
-        //    than full follow list — indexers don't get hammered with 1500 author REQs).
         var relayToAuthors: [String: Set<String>] = [:]
         var fallbackAuthors: [String] = []
         for author in follows {
@@ -431,8 +431,7 @@ final class FeedViewModel {
 
         // 3. Distribute fallback authors round-robin across indexer relays. Each
         //    indexer ends up with ~fallback/4 authors instead of every indexer
-        //    receiving the entire follow list (Android's observable behavior:
-        //    no relay holds more than a few hundred npubs).
+        //    receiving the entire follow list.
         let indexers = Self.indexerRelays.compactMap { RelayUrlValidator.canonicalize($0) }
                                           .filter { RelayUrlValidator.isConnectable($0) }
         if !fallbackAuthors.isEmpty && !indexers.isEmpty {
@@ -458,31 +457,28 @@ final class FeedViewModel {
             (url: q.relayUrl, authorCount: relayToAuthors[q.relayUrl]?.count ?? 0)
         }
 
-        // 5. Stream events into the feed as relays return them. Batched persist (200ms windows).
-        var pendingPersist: [NostrEvent] = []
-        var lastFlush = Date()
-        let store = eventStore
+        // 5. Persistent subscription: backlog streams from the per-relay REQs (since=…)
+        //    and the same sockets keep delivering live events. No re-subscribe needed
+        //    after EOSE — matches Android's SharedFlow behavior.
+        cancelLiveSubscription()
+        let subId = "follows-feed-\(UUID().uuidString.prefix(8).lowercased())"
+        let sub = RelayPool.subscribe(queries: queries, id: subId)
+        liveSubscription = sub
 
-        for await (event, _) in RelayPool.stream(queries: queries, timeout: 15) {
-            markActivityIfFollowed(event)
-            guard Self.isFeedRenderable(event) else { continue }
-            guard seenIds.insert(event.id).inserted else { continue }
+        liveConsumer = Task { [weak self] in
+            for await (event, _) in sub.events {
+                guard let self else { return }
+                if Task.isCancelled { return }
+                self.markActivityIfFollowed(event)
+                guard Self.isFeedRenderable(event) else { continue }
+                guard self.seenIds.insert(event.id).inserted else { continue }
 
-            let idx = events.firstIndex(where: { $0.createdAt < event.createdAt }) ?? events.count
-            events.insert(event, at: idx)
+                let idx = self.events.firstIndex(where: { $0.createdAt < event.createdAt }) ?? self.events.count
+                self.events.insert(event, at: idx)
 
-            pendingPersist.append(event)
-            if pendingPersist.count >= 50 || Date().timeIntervalSince(lastFlush) > 0.2 {
-                let batch = pendingPersist
-                pendingPersist.removeAll(keepingCapacity: true)
-                lastFlush = Date()
-                Task { await store.persist(batch) }
+                Task.detached { await EventStore.shared.persist([event]) }
+                Task { await self.requestProfileIfNeeded(event.pubkey) }
             }
-        }
-
-        if !pendingPersist.isEmpty {
-            let batch = pendingPersist
-            Task { await store.persist(batch) }
         }
     }
 
