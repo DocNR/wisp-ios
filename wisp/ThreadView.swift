@@ -182,16 +182,16 @@ struct ThreadView: View {
                         ProgressView().frame(width: 28, height: 28)
                     } else {
                         Text("GIF")
-                            .font(.caption.weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 4)
+                                RoundedRectangle(cornerRadius: 5)
                                     .stroke(Color.secondary, lineWidth: 1.5)
                             )
-                            .foregroundStyle(.secondary)
                     }
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Add GIF")
                 .disabled(viewModel.isSending || gifUploading)
 
