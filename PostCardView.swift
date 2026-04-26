@@ -114,6 +114,7 @@ struct PostCardView: View {
                             reactors: engagement?.reactors ?? [],
                             reposters: engagement?.reposters ?? [],
                             relays: combinedRelays(for: displayEvent.id),
+                            tags: displayEvent.tags,
                             profiles: profiles,
                             onProfileTap: onProfileTap
                         )
@@ -402,8 +403,19 @@ private struct NoteDetailsPanel: View {
     let reactors: [Reactor]
     let reposters: [String]
     let relays: [String]
+    let tags: [[String]]
     let profiles: [String: ProfileData]
     let onProfileTap: ((String) -> Void)?
+
+    @State private var relaysExpanded = false
+
+    private static let relayChipLimit = 6
+
+    private var clientName: String? {
+        guard let tag = tags.first(where: { $0.count >= 2 && $0[0] == "client" }) else { return nil }
+        let value = tag[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -424,6 +436,11 @@ private struct NoteDetailsPanel: View {
             if !relays.isEmpty {
                 if !zappers.isEmpty || !reposters.isEmpty || !reactors.isEmpty { sectionDivider }
                 seenOnSection
+            }
+
+            if let name = clientName {
+                if !zappers.isEmpty || !reposters.isEmpty || !reactors.isEmpty || !relays.isEmpty { sectionDivider }
+                postedViaSection(name: name)
             }
         }
         .padding(.horizontal, 12)
@@ -514,11 +531,37 @@ private struct NoteDetailsPanel: View {
     }
 
     private var seenOnSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let hosts = relays.map { hostname(of: $0) }
+        let limit = Self.relayChipLimit
+        let visible = (relaysExpanded || hosts.count <= limit) ? hosts : Array(hosts.prefix(limit))
+        let hidden = max(0, hosts.count - visible.count)
+        return VStack(alignment: .leading, spacing: 4) {
             Text("Seen on")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            FlowingChips(items: relays.map { hostname(of: $0) })
+            FlowingChips(items: visible)
+            if hidden > 0 || (relaysExpanded && hosts.count > limit) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { relaysExpanded.toggle() }
+                } label: {
+                    Text(relaysExpanded ? "Show less" : "+\(hidden) more")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(Color.wispPrimary)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    private func postedViaSection(name: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "app.badge")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text("Posted via \(name)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -580,12 +623,7 @@ private struct FlowingChips: View {
     let items: [String]
 
     var body: some View {
-        // Lightweight wrapping using LazyVGrid with adaptive columns.
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 80), spacing: 6, alignment: .leading)],
-            alignment: .leading,
-            spacing: 6
-        ) {
+        ChipFlowLayout(spacing: 6, lineSpacing: 6) {
             ForEach(items, id: \.self) { item in
                 Text(item)
                     .font(.caption2)
@@ -596,8 +634,50 @@ private struct FlowingChips: View {
                         Capsule().fill(Color.secondary.opacity(0.15))
                     )
                     .lineLimit(1)
-                    .truncationMode(.middle)
             }
+        }
+    }
+}
+
+private struct ChipFlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var totalHeight: CGFloat = 0
+        var lineWidth: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if lineWidth + size.width > maxWidth, lineWidth > 0 {
+                totalHeight += lineHeight + lineSpacing
+                lineWidth = 0
+                lineHeight = 0
+            }
+            lineWidth += size.width + (lineWidth > 0 ? spacing : 0)
+            lineHeight = max(lineHeight, size.height)
+        }
+        totalHeight += lineHeight
+        return CGSize(width: maxWidth.isFinite ? maxWidth : lineWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var lineHeight: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
         }
     }
 }

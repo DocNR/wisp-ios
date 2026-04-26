@@ -33,6 +33,7 @@ struct MainView: View {
     @State private var hashtagSetRepo = HashtagSetRepository.shared
     @State private var showRelaySettings = false
     @State private var pendingAuthRequest: PendingAuthRequest?
+    @State private var feedFabOpacity: Double = 1.0
 
     private let drawerWidth: CGFloat = 320
 
@@ -364,7 +365,9 @@ struct MainView: View {
                             if !drawerOpen {
                                 ComposeFAB { showCompose = true }
                                     .padding(.trailing, 18)
-                                    .padding(.bottom, 70)
+                                    .padding(.bottom, 32)
+                                    .opacity(feedFabOpacity)
+                                    .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
                             }
                         }
                             .navigationDestination(for: ProfileRoute.self) { route in
@@ -831,6 +834,18 @@ struct MainView: View {
                     }
                 }
                 .refreshable { await viewModel.refresh() }
+                .onScrollPhaseChange { _, newPhase in
+                    switch newPhase {
+                    case .tracking, .interacting:
+                        feedFabOpacity = 0.35
+                    case .decelerating, .animating:
+                        feedFabOpacity = 0.75
+                    case .idle:
+                        feedFabOpacity = 1.0
+                    @unknown default:
+                        feedFabOpacity = 1.0
+                    }
+                }
             }
         }
     }
