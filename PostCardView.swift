@@ -285,6 +285,7 @@ struct PostCardView: View {
         Task {
             do {
                 try await ReactionSender.shared.react(to: target, keypair: keypair, picked: picked)
+                Haptics.shared.blip()
                 NSLog("[Reaction] react succeeded")
             } catch {
                 NSLog("[Reaction] react failed: %@", String(describing: error))

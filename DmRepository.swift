@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// In-memory store for decrypted DM rumors. Mirrors Android's DmRepository design:
 /// ephemeral conversation cache, persistent only for last-read / latest-seen-wrap timestamps.
@@ -15,6 +18,10 @@ final class DmRepository {
     private var rumorIndex: [String: (convKey: String, msgId: String)] = [:]
 
     private var activePubkey: String = ""
+
+    /// Wall-clock at first construction. Used to gate the incoming-DM haptic so backfilled
+    /// gift wraps don't buzz the user on cold start. Mirrors NotificationRepository.
+    private let sessionStartTime: Int = Int(Date().timeIntervalSince1970)
 
     /// Comma-joined sorted participant pubkeys; stable across sender/receiver.
     nonisolated static func conversationKey(participants: [String]) -> String {
@@ -47,7 +54,17 @@ final class DmRepository {
         conversations[conversationKey] = existing
         rumorIndex[msg.rumorId] = (conversationKey, msg.id)
         bumpLatestWrapTs(msg.createdAt)
+        fireIncomingHaptic(for: msg)
         return true
+    }
+
+    private func fireIncomingHaptic(for msg: DmMessage) {
+        guard msg.senderPubkey != activePubkey else { return }
+        guard msg.createdAt >= sessionStartTime else { return }
+        #if canImport(UIKit)
+        guard UIApplication.shared.applicationState == .active else { return }
+        #endif
+        Haptics.shared.pulse()
     }
 
     func markGiftWrapSeen(_ giftWrapId: String) -> Bool {

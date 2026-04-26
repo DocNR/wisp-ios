@@ -21,6 +21,7 @@ final class AppSettings {
         static let clientTagEnabled = "wisp_settings_client_tag_enabled"
         static let fiatModeEnabled = "wisp_settings_fiat_mode_enabled"
         static let fiatCurrency = "wisp_settings_fiat_currency"
+        static let notificationSoundsEnabled = "wisp_settings_notification_sounds_enabled"
     }
 
     private static let defaultAccentARGB: Int = 0xFFFF9800
@@ -52,6 +53,9 @@ final class AppSettings {
     var fiatCurrency: String {
         didSet { UserDefaults.standard.set(fiatCurrency, forKey: Keys.fiatCurrency) }
     }
+    var notificationSoundsEnabled: Bool {
+        didSet { UserDefaults.standard.set(notificationSoundsEnabled, forKey: Keys.notificationSoundsEnabled) }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -65,6 +69,7 @@ final class AppSettings {
         self.clientTagEnabled = defaults.object(forKey: Keys.clientTagEnabled) as? Bool ?? true
         self.fiatModeEnabled = defaults.object(forKey: Keys.fiatModeEnabled) as? Bool ?? false
         self.fiatCurrency = defaults.string(forKey: Keys.fiatCurrency) ?? "USD"
+        self.notificationSoundsEnabled = defaults.object(forKey: Keys.notificationSoundsEnabled) as? Bool ?? true
     }
 
     var preferredColorScheme: ColorScheme? {

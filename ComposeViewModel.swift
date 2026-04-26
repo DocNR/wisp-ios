@@ -701,6 +701,7 @@ final class ComposeViewModel {
                 publishedEventId = event.id
                 clearLocalAutosave()
                 await clearDraftOnPublish()
+                Haptics.shared.pulse()
             default:
                 lastError = "Scheduler relay rejected the post."
             }
@@ -716,6 +717,7 @@ final class ComposeViewModel {
             clearLocalAutosave()
             await EventStore.shared.persist([event])
             await clearDraftOnPublish()
+            Haptics.shared.pulse()
         }
     }
 

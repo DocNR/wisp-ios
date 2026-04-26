@@ -27,10 +27,23 @@ struct NotificationsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 Text("Notifications")
                     .font(.title3.weight(.semibold))
                 Spacer()
+                Button {
+                    AppSettings.shared.notificationSoundsEnabled.toggle()
+                } label: {
+                    Image(systemName: AppSettings.shared.notificationSoundsEnabled
+                          ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(AppSettings.shared.notificationSoundsEnabled
+                                    ? "Mute notification sounds" : "Enable notification sounds")
                 if viewModel.isLoading {
                     ProgressView().scaleEffect(0.7)
                 }

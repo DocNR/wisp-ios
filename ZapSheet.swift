@@ -117,6 +117,7 @@ struct ZapSheet: View {
         )
         switch result {
         case .success:
+            Haptics.shared.zapBuzz()
             status = "⚡️ Zap sent"
             success = true
             onSuccess?(amountSats)

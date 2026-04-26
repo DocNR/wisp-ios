@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// In-memory store for inbound notification events. Mirrors Android's NotificationRepository:
 /// LRU dedup, group + flat caps, persistent only for last-read / latest-seen / self-event-id state.
@@ -37,6 +40,10 @@ final class NotificationRepository {
 
     private var activePubkey: String = ""
     private var dmPlaceholders: [String: NotificationGroup] = [:]
+
+    /// Wall-clock at first construction. Mirrors Android's `soundEligibleAfter` so 24h backfill
+    /// after a cold start never blasts sounds for already-old events.
+    private let sessionStartTime: Int = Int(Date().timeIntervalSince1970)
 
     func bind(activePubkey: String) {
         if activePubkey != self.activePubkey {
@@ -92,7 +99,40 @@ final class NotificationRepository {
         if persist {
             Task.detached { await EventStore.shared.persist([event]) }
         }
+        fireEffects(for: item, persist: persist)
         return true
+    }
+
+    private func fireEffects(for item: FlatNotificationItem, persist: Bool) {
+        let now = Int(Date().timeIntervalSince1970)
+        NSLog("[NotifFX] kind=%@ persist=%d ts=%d sessionStart=%d delta=%d", String(describing: item.kind), persist ? 1 : 0, item.timestamp, sessionStartTime, now - item.timestamp)
+        guard persist else { NSLog("[NotifFX] dropped: persist=false"); return }
+        guard item.timestamp >= sessionStartTime else {
+            NSLog("[NotifFX] dropped: ts %d < sessionStart %d", item.timestamp, sessionStartTime)
+            return
+        }
+        #if canImport(UIKit)
+        let state = UIApplication.shared.applicationState
+        guard state == .active else {
+            NSLog("[NotifFX] dropped: applicationState=%d (not .active)", state.rawValue)
+            return
+        }
+        #endif
+        let soundsOn = AppSettings.shared.notificationSoundsEnabled
+        NSLog("[NotifFX] firing kind=%@ soundsOn=%d", String(describing: item.kind), soundsOn ? 1 : 0)
+        switch item.kind {
+        case .reply:
+            if soundsOn { NotificationSounds.shared.play(.reply) }
+            Haptics.shared.pulse()
+        case .reaction, .repost, .mention, .quote:
+            if soundsOn { NotificationSounds.shared.play(.blip) }
+            Haptics.shared.blip()
+        case .zap:
+            if soundsOn { NotificationSounds.shared.play(.zap) }
+            Haptics.shared.zapBuzz()
+        case .pollVote, .dm:
+            break
+        }
     }
 
     func addInlineReply(_ event: NostrEvent, groupId: String) {
