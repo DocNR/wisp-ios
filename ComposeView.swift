@@ -11,15 +11,19 @@ struct ComposeView: View {
     @State private var showCancelConfirm = false
     @State private var showGifPicker = false
 
+    /// Draft to load on first appear. Nil for `.new` and `.reply`/`.quote` composers.
+    /// Loaded from `.task` rather than `init` to defeat SwiftUI's State preservation
+    /// (which ignores `State(initialValue:)` when state already exists for this view identity).
+    private let initialDraft: Nip37.Draft?
+
     init(keypair: Keypair, mode: ComposeMode = .new) {
+        self.initialDraft = nil
         _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: mode))
     }
 
-    /// Construct a composer pre-loaded with a saved draft.
     init(keypair: Keypair, draft: Nip37.Draft) {
-        let vm = ComposeViewModel(keypair: keypair, mode: .new)
-        vm.loadDraft(draft)
-        _viewModel = State(initialValue: vm)
+        self.initialDraft = draft
+        _viewModel = State(initialValue: ComposeViewModel(keypair: keypair, mode: .new))
     }
 
     var body: some View {
@@ -37,6 +41,8 @@ struct ComposeView: View {
                             }
 
                             textEditor
+
+                            actionsRow
 
                             if viewModel.pollEnabled {
                                 PollOptionsEditor(viewModel: viewModel)
@@ -122,6 +128,9 @@ struct ComposeView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .task {
+            if let draft = initialDraft, viewModel.currentDraftId != draft.dTag {
+                viewModel.loadDraft(draft)
+            }
             await viewModel.start()
             contentFocused = true
         }
@@ -159,6 +168,7 @@ struct ComposeView: View {
             Button("Discard", role: .destructive) {
                 viewModel.cancelPublish()
                 viewModel.explicitlyDiscarded = true
+                viewModel.clearLocalAutosave()
                 dismiss()
             }
             Button("Keep Editing", role: .cancel) {}
@@ -167,6 +177,18 @@ struct ComposeView: View {
         }
         .onChange(of: viewModel.draftSaved) { _, saved in
             if saved { dismiss() }
+        }
+        .onChange(of: viewModel.content) { _, _ in
+            viewModel.writeLocalAutosave()
+        }
+        .onChange(of: viewModel.explicit) { _, _ in
+            viewModel.writeLocalAutosave()
+        }
+        .onChange(of: viewModel.powEnabled) { _, _ in
+            viewModel.writeLocalAutosave()
+        }
+        .onChange(of: viewModel.scheduleAt) { _, _ in
+            viewModel.writeLocalAutosave()
         }
         .onDisappear {
             // Auto-save on dismiss when the user navigated away without publishing
@@ -452,14 +474,14 @@ struct ComposeView: View {
         }
     }
 
-    // MARK: - Bottom bar
+    // MARK: - Actions row (under text editor)
 
-    private var bottomBar: some View {
-        HStack(spacing: 16) {
+    private var actionsRow: some View {
+        HStack(spacing: 22) {
             if !viewModel.galleryMode, !viewModel.pollEnabled {
                 PhotosPicker(selection: $pickerItems, maxSelectionCount: 4, matching: .any(of: [.images, .videos])) {
                     Image(systemName: "photo.on.rectangle")
-                        .font(.system(size: 20))
+                        .font(.system(size: 22))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -469,16 +491,32 @@ struct ComposeView: View {
                     showGifPicker = true
                 } label: {
                     Text("GIF")
-                        .font(.caption.weight(.bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: 5)
                                 .stroke(Color.secondary, lineWidth: 1.5)
                         )
-                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Add GIF")
+            }
+
+            Button {
+                viewModel.toggleNsfw()
+            } label: {
+                Image(systemName: "exclamationmark.triangle\(viewModel.explicit ? ".fill" : "")")
+                    .font(.system(size: 22))
+                    .foregroundStyle(viewModel.explicit ? Color.orange : .secondary)
+            }
+
+            Button {
+                viewModel.togglePow()
+            } label: {
+                Image(systemName: "shield\(viewModel.powEnabled ? ".fill" : "")")
+                    .font(.system(size: 22))
+                    .foregroundStyle(viewModel.powEnabled ? Color.wispPrimary : .secondary)
             }
 
             if viewModel.mode.allowsPollToggle {
@@ -488,56 +526,39 @@ struct ComposeView: View {
                     }
                 } label: {
                     Image(systemName: "chart.bar")
-                        .font(.system(size: 20))
+                        .font(.system(size: 22))
                         .foregroundStyle(viewModel.pollEnabled ? Color.wispPrimary : .secondary)
                 }
                 .accessibilityLabel(viewModel.pollEnabled ? "Disable poll" : "Create poll")
             }
 
             Button {
-                viewModel.toggleNsfw()
-            } label: {
-                Image(systemName: "exclamationmark.triangle\(viewModel.explicit ? ".fill" : "")")
-                    .font(.system(size: 20))
-                    .foregroundStyle(viewModel.explicit ? Color.orange : .secondary)
-            }
-
-            Button {
-                viewModel.togglePow()
-            } label: {
-                Image(systemName: "shield\(viewModel.powEnabled ? ".fill" : "")")
-                    .font(.system(size: 20))
-                    .foregroundStyle(viewModel.powEnabled ? Color.wispPrimary : .secondary)
-            }
-
-            Button {
                 showScheduleSheet = true
             } label: {
                 Image(systemName: "clock\(viewModel.scheduleEnabled ? ".fill" : "")")
-                    .font(.system(size: 20))
+                    .font(.system(size: 22))
                     .foregroundStyle(viewModel.scheduleEnabled ? Color.wispPrimary : .secondary)
             }
 
-            if viewModel.hasUnsavedContent, !viewModel.isPublishing, viewModel.countdownSeconds == nil {
-                Button {
-                    Task { await viewModel.saveDraft() }
-                } label: {
-                    Text("Save Draft")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
 
+    // MARK: - Bottom publish bar
+
+    private var bottomBar: some View {
+        HStack(spacing: 12) {
             if viewModel.countdownSeconds != nil {
                 Button(role: .destructive) {
                     viewModel.cancelPublish()
                 } label: {
-                    Text("Undo").font(.subheadline.weight(.semibold))
+                    Text("Undo")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
                 .background(Color.wispSurfaceVariant, in: Capsule())
 
                 Button {
@@ -545,34 +566,37 @@ struct ComposeView: View {
                 } label: {
                     Text("Post Now (\(viewModel.countdownSeconds ?? 0)s)")
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
                 .background(Color.wispPrimary, in: Capsule())
                 .foregroundStyle(.white)
             } else {
                 Button {
                     viewModel.publish()
                 } label: {
-                    if viewModel.isMining {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small).tint(.white)
-                            Text("Mining \(viewModel.miningAttempts)")
+                    Group {
+                        if viewModel.isMining {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small).tint(.white)
+                                Text("Mining \(viewModel.miningAttempts)")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                        } else if viewModel.isPublishing {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small).tint(.white)
+                                Text(viewModel.scheduleEnabled ? "Scheduling" : "Publishing")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                        } else {
+                            Text(viewModel.scheduleEnabled ? "Schedule Post" : "Publish")
                                 .font(.subheadline.weight(.semibold))
                         }
-                    } else if viewModel.isPublishing {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small).tint(.white)
-                            Text(viewModel.scheduleEnabled ? "Scheduling" : "Publishing")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                    } else {
-                        Text(viewModel.scheduleEnabled ? "Schedule Post" : "Publish")
-                            .font(.subheadline.weight(.semibold))
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
                 .background(Color.wispPrimary, in: Capsule())
                 .foregroundStyle(.white)
                 .disabled(viewModel.isPublishing || viewModel.isMining)
