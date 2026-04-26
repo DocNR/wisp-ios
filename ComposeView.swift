@@ -161,6 +161,7 @@ struct ComposeView: View {
             Button("Discard", role: .destructive) {
                 viewModel.cancelPublish()
                 viewModel.explicitlyDiscarded = true
+                viewModel.clearLocalAutosave()
                 dismiss()
             }
             Button("Keep Editing", role: .cancel) {}
@@ -169,6 +170,18 @@ struct ComposeView: View {
         }
         .onChange(of: viewModel.draftSaved) { _, saved in
             if saved { dismiss() }
+        }
+        .onChange(of: viewModel.content) { _, _ in
+            viewModel.writeLocalAutosave()
+        }
+        .onChange(of: viewModel.explicit) { _, _ in
+            viewModel.writeLocalAutosave()
+        }
+        .onChange(of: viewModel.powEnabled) { _, _ in
+            viewModel.writeLocalAutosave()
+        }
+        .onChange(of: viewModel.scheduleAt) { _, _ in
+            viewModel.writeLocalAutosave()
         }
         .onDisappear {
             // Auto-save on dismiss when the user navigated away without publishing

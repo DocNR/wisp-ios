@@ -92,8 +92,54 @@ final class ComposeViewModel {
         case .quote(let event):
             // Auto-append the quote URI on open.
             content = Nip18.appendNoteUri(content: "", eventIdHex: event.id, relayHints: [], authorHex: event.pubkey)
+        case .new:
+            loadLocalAutosave()
         default:
             break
+        }
+    }
+
+    // MARK: - Local autosave (instant restore on reopen)
+
+    /// Per-pubkey, per-mode UserDefaults bucket. Only `.new` composers autosave —
+    /// reply/quote contexts depend on parent events that aren't trivially restored.
+    private var autosaveKey: String { "compose_autosave_new_\(keypair.pubkey)" }
+
+    func writeLocalAutosave() {
+        guard case .new = mode else { return }
+        // Don't autosave when editing a saved draft — the draft is the source of truth
+        // and writes go through `saveDraft()`. Otherwise opening a draft would clobber
+        // the .new composer's autosave with the draft's content.
+        guard currentDraftId == nil else { return }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: autosaveKey)
+            return
+        }
+        var payload: [String: Any] = [
+            "content": content,
+            "explicit": explicit,
+            "powEnabled": powEnabled
+        ]
+        if let ts = scheduleAt?.timeIntervalSince1970 {
+            payload["scheduleAt"] = ts
+        }
+        UserDefaults.standard.set(payload, forKey: autosaveKey)
+    }
+
+    func clearLocalAutosave() {
+        UserDefaults.standard.removeObject(forKey: autosaveKey)
+    }
+
+    private func loadLocalAutosave() {
+        guard let payload = UserDefaults.standard.dictionary(forKey: autosaveKey),
+              let saved = payload["content"] as? String,
+              !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        content = saved
+        explicit = payload["explicit"] as? Bool ?? false
+        powEnabled = payload["powEnabled"] as? Bool ?? powEnabled
+        if let ts = payload["scheduleAt"] as? TimeInterval {
+            scheduleAt = Date(timeIntervalSince1970: ts)
         }
     }
 
@@ -653,6 +699,7 @@ final class ComposeViewModel {
             switch result {
             case .ok, .duplicate:
                 publishedEventId = event.id
+                clearLocalAutosave()
                 await clearDraftOnPublish()
             default:
                 lastError = "Scheduler relay rejected the post."
@@ -666,6 +713,7 @@ final class ComposeViewModel {
             lastError = "No relays accepted the post."
         } else {
             publishedEventId = event.id
+            clearLocalAutosave()
             await EventStore.shared.persist([event])
             await clearDraftOnPublish()
         }
