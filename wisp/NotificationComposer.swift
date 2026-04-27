@@ -1,56 +1,51 @@
 import SwiftUI
 
+/// Tap-to-open affordance that hands off to the full `ComposeView` in `.reply` mode.
+/// Matches the thread-view pattern — replies share the same composer as new posts so
+/// mentions, emoji, media, polls, and the 10-second undo countdown all work.
 struct NotificationComposer: View {
     let targetEvent: NostrEvent
     let groupId: String
     @Binding var sending: Bool
     let viewModel: NotificationsViewModel
 
-    @State private var text: String = ""
-    @FocusState private var focused: Bool
+    @State private var showCompose = false
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Reply…", text: $text, axis: .vertical)
-                .focused($focused)
-                .lineLimit(1...8)
-                .padding(10)
-                .background(Color.wispSurfaceVariant.opacity(0.4))
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .disabled(sending)
-
-            Button {
-                send()
-            } label: {
-                Image(systemName: sending ? "hourglass" : "paperplane.fill")
+        Button {
+            showCompose = true
+        } label: {
+            HStack(spacing: 10) {
+                Text("Reply\u{2026}")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "square.and.pencil")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(canSend ? Color.wispPrimary : Color.wispSurfaceVariant)
-                    .clipShape(Circle())
+                    .foregroundStyle(Color.wispPrimary)
             }
-            .disabled(!canSend)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showCompose) {
+            if let keypair = NostrKey.load() {
+                ComposeView(keypair: keypair, mode: .reply(parent: targetEvent, root: replyRoot()))
+            }
         }
     }
 
-    private var canSend: Bool {
-        !sending && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func send() {
-        let body = text
-        sending = true
-        Task {
-            defer { sending = false }
-            do {
-                try await viewModel.sendQuickReply(targetEvent: targetEvent, text: body, groupId: groupId)
-                await MainActor.run {
-                    text = ""
-                    focused = false
-                }
-            } catch {
-                // Surfacing send errors is deferred to v2; the optimistic row already shows.
-            }
+    /// Resolve the thread root. If `targetEvent` is itself a reply, build a minimal stub
+    /// pointing at its NIP-10 `root` so ComposeView emits a proper `["e", root, "", "root"]`
+    /// tag. Otherwise `targetEvent` is the root.
+    private func replyRoot() -> NostrEvent? {
+        guard let rootId = Nip10.rootId(of: targetEvent), rootId != targetEvent.id else {
+            return targetEvent
         }
+        return NostrEvent(
+            id: rootId, pubkey: "", kind: 1,
+            createdAt: 0, tags: [], content: "", sig: ""
+        )
     }
 }

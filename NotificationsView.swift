@@ -4,6 +4,7 @@ struct NotificationsView: View {
     @Bindable var viewModel: NotificationsViewModel
     let onPeerTap: (String) -> Void
     let onDmTap: (String) -> Void
+    var onNoteTap: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -123,7 +124,8 @@ struct NotificationsView: View {
                             group: group,
                             viewModel: viewModel,
                             onPeerTap: onPeerTap,
-                            onDmTap: onDmTap
+                            onDmTap: onDmTap,
+                            onNoteTap: onNoteTap
                         )
                         Divider().overlay(Color.wispSurfaceVariant.opacity(0.4))
                     }

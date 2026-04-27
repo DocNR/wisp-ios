@@ -2,12 +2,9 @@ import SwiftUI
 
 struct ThreadView: View {
     @State private var viewModel: ThreadViewModel
-    @State private var replyText: String = ""
     @State private var showError: Bool = false
     @State private var showHiddenSpam: Bool = false
-    @State private var showGifPicker: Bool = false
-    @State private var gifUploading: Bool = false
-    @FocusState private var composerFocused: Bool
+    @State private var showReplyCompose: Bool = false
 
     init(seedEventId: String, authorHint: String?, keypair: Keypair) {
         _viewModel = State(initialValue: ThreadViewModel(
@@ -68,6 +65,11 @@ struct ThreadView: View {
             Button("OK") { viewModel.errorMessage = nil }
         } message: { msg in
             Text(msg)
+        }
+        .sheet(isPresented: $showReplyCompose) {
+            if let root = viewModel.rootEvent {
+                ComposeView(keypair: viewModel.keypair, mode: .reply(parent: root, root: root))
+            }
         }
     }
 
@@ -171,112 +173,33 @@ struct ThreadView: View {
         CGFloat(min(depth, 8)) * 12
     }
 
+    /// Tap-to-open affordance that hands off to the full ComposeView in `.reply` mode.
+    /// Matches the Android pattern — same composer for new posts and replies, so mentions,
+    /// emoji, media, polls, hashtags, and the 10-second undo countdown all work uniformly.
     private var composer: some View {
         VStack(spacing: 0) {
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-            HStack(spacing: 8) {
-                Button {
-                    showGifPicker = true
-                } label: {
-                    if gifUploading {
-                        ProgressView().frame(width: 28, height: 28)
-                    } else {
-                        Text("GIF")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 28)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .stroke(Color.secondary, lineWidth: 1.5)
-                            )
-                    }
+            Button {
+                showReplyCompose = true
+            } label: {
+                HStack(spacing: 10) {
+                    Text("Reply\u{2026}")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.wispPrimary)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Add GIF")
-                .disabled(viewModel.isSending || gifUploading)
-
-                TextField("Reply\u{2026}", text: $replyText, axis: .vertical)
-                    .lineLimit(1...4)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
-                    .focused($composerFocused)
-                    .disabled(viewModel.isSending)
-
-                if let countdown = viewModel.replyCountdown {
-                    Button(role: .destructive) {
-                        viewModel.cancelReply()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 22, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                    }
-                    .foregroundStyle(.secondary)
-
-                    Button {
-                        viewModel.publishReplyNow()
-                    } label: {
-                        Text("Send (\(countdown))")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
-                            .background(Color.wispPrimary, in: Capsule())
-                            .foregroundStyle(.white)
-                    }
-                } else {
-                    Button {
-                        sendReply()
-                    } label: {
-                        if viewModel.isSending {
-                            ProgressView()
-                                .frame(width: 28, height: 28)
-                        } else {
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 18, weight: .semibold))
-                                .frame(width: 28, height: 28)
-                        }
-                    }
-                    .disabled(viewModel.isSending || replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.rootEvent == nil)
-                    .foregroundStyle(Color.wispPrimary)
-                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.wispSurfaceVariant.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
             }
+            .buttonStyle(.plain)
+            .disabled(viewModel.rootEvent == nil)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .background(Color.wispBackground)
-        .sheet(isPresented: $showGifPicker) {
-            GifPickerView { giphyURL in
-                Task { await attachGif(giphyURL) }
-            }
-        }
-    }
-
-    /// Re-host the picked Giphy GIF on the user's Blossom servers, then drop
-    /// the resulting URL into the reply text on its own line.
-    private func attachGif(_ giphyURL: String) async {
-        gifUploading = true
-        defer { gifUploading = false }
-        var servers = BlossomServerList.cached(for: viewModel.keypair.pubkey)
-        if servers.isEmpty {
-            servers = [BlossomServerList.defaultServer]
-        }
-        let outcome = await GifBlossomUploader.rehost(
-            giphyURL: giphyURL,
-            keypair: viewModel.keypair,
-            servers: servers
-        )
-        if !replyText.isEmpty, !replyText.hasSuffix("\n") { replyText += "\n" }
-        replyText += outcome.url
-        replyText += "\n"
-    }
-
-    private func sendReply() {
-        let text = replyText
-        viewModel.publishReply(content: text)
-        if viewModel.errorMessage == nil && viewModel.replyCountdown != nil {
-            replyText = ""
-            composerFocused = false
-        }
     }
 }
