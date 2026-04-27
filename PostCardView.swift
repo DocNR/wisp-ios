@@ -15,6 +15,7 @@ struct PostCardView: View {
     @State private var showEmojiLibrary = false
     @State private var showAddToList = false
     @State private var showQuoteCompose = false
+    @State private var showReplyCompose = false
     @State private var showDeleteConfirm = false
     @State private var actionAlert: ActionAlert?
     @State private var zapPollOptionIndex: Int? = nil
@@ -190,6 +191,12 @@ struct PostCardView: View {
                 ComposeView(keypair: keypair, mode: .quote(resolveRepost().event))
             }
         }
+        .sheet(isPresented: $showReplyCompose) {
+            if let keypair = NostrKey.load() {
+                let target = resolveRepost().event
+                ComposeView(keypair: keypair, mode: .reply(parent: target, root: replyRootStub(for: target)))
+            }
+        }
         .confirmationDialog(
             "Delete this note?",
             isPresented: $showDeleteConfirm,
@@ -231,7 +238,12 @@ struct PostCardView: View {
 
     private var actionBar: some View {
         HStack(spacing: 0) {
-            actionItem(icon: "bubble.right", count: engagement?.replies)
+            Button {
+                showReplyCompose = true
+            } label: {
+                actionItem(icon: "bubble.right", count: engagement?.replies)
+            }
+            .buttonStyle(.plain)
             Spacer()
             heartAction
             Spacer()
@@ -502,6 +514,19 @@ struct PostCardView: View {
 
     private func copyNoteJson(_ target: NostrEvent) {
         UIPasteboard.general.string = target.toJSON()
+    }
+
+    /// Resolve the thread root for a reply to `target`. If `target` is itself a reply,
+    /// build a minimal stub event for its NIP-10 `root` so ComposeView can emit a proper
+    /// `["e", root, "", "root"]` tag. If `target` is the root, return `target` directly.
+    private func replyRootStub(for target: NostrEvent) -> NostrEvent? {
+        guard let rootId = Nip10.rootId(of: target), rootId != target.id else {
+            return target
+        }
+        return NostrEvent(
+            id: rootId, pubkey: "", kind: 1,
+            createdAt: 0, tags: [], content: "", sig: ""
+        )
     }
 
     private func shareURI(for target: NostrEvent) -> String {
