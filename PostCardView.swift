@@ -39,6 +39,15 @@ struct PostCardView: View {
         guard let me = myPubkey, let counts = engagement else { return false }
         return counts.reposters.contains(me)
     }
+    /// The user's reacted emoji as a displayable unicode character, or nil if they haven't
+    /// reacted or the reaction is a NIP-30 `:shortcode:` we can't render inline (we fall back
+    /// to a tinted heart in that case). Maps the legacy NIP-25 `+` / empty content to ❤️.
+    private var displayReactedEmoji: String? {
+        guard let raw = iReactedEmoji else { return nil }
+        if raw == "+" || raw.isEmpty { return "\u{2764}\u{FE0F}" }
+        if raw.hasPrefix(":") && raw.hasSuffix(":") && raw.count > 2 { return nil }
+        return raw
+    }
 
     var body: some View {
         let resolved = resolveRepost()
@@ -394,15 +403,28 @@ struct PostCardView: View {
     }
 
     private var heartAction: some View {
-        let reacted = iReactedEmoji != nil
+        let displayed = displayReactedEmoji
         return Button {
             showReactionPicker = true
         } label: {
-            actionItem(
-                icon: reacted ? "heart.fill" : "heart",
-                count: engagement?.reactions,
-                tint: reacted ? .pink : nil
-            )
+            if let emoji = displayed {
+                HStack(spacing: 4) {
+                    Text(emoji)
+                        .font(.system(size: 16))
+                    if let count = engagement?.reactions, count > 0 {
+                        Text(formatCount(count))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(height: 28)
+            } else {
+                actionItem(
+                    icon: iReactedEmoji != nil ? "heart.fill" : "heart",
+                    count: engagement?.reactions,
+                    tint: iReactedEmoji != nil ? .pink : nil
+                )
+            }
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showReactionPicker, arrowEdge: .top) {
