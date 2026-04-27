@@ -53,6 +53,7 @@ final class EngagementRepository {
         seenEngagementIds.removeAll()
         seenReactionKeys.removeAll()
         ReactionSender.shared.clear()
+        RepostSender.shared.clear()
     }
 
     // MARK: - Optimistic reactions
@@ -90,6 +91,30 @@ final class EngagementRepository {
         guard var current = counts[eventId] else { return }
         if current.reactions > 0 { current.reactions -= 1 }
         current.reactors.removeAll { $0.pubkey == pubkey && $0.emoji == emoji }
+        counts[eventId] = current
+    }
+
+    // MARK: - Optimistic reposts
+
+    /// Bump the repost counter for `eventId` immediately. Idempotent per `(eventId, reposter)`.
+    /// `repostEventId` is reserved against the inbound dedup set so the published kind-6 streaming
+    /// back from a relay doesn't double-count.
+    func applyOptimisticRepost(eventId: String, repostEventId: String, reposterPubkey: String) {
+        seenEngagementIds.insert(repostEventId)
+        queriedIds.insert(eventId)
+        var current = counts[eventId] ?? EngagementCounts()
+        if current.reposters.contains(reposterPubkey) { return }
+        current.reposts += 1
+        current.reposters.append(reposterPubkey)
+        counts[eventId] = current
+    }
+
+    /// Revert a prior optimistic repost. Called when publishing fails.
+    func revertOptimisticRepost(eventId: String, reposterPubkey: String) {
+        guard var current = counts[eventId] else { return }
+        guard current.reposters.contains(reposterPubkey) else { return }
+        if current.reposts > 0 { current.reposts -= 1 }
+        current.reposters.removeAll { $0 == reposterPubkey }
         counts[eventId] = current
     }
 

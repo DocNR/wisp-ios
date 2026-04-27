@@ -14,16 +14,29 @@ struct PostCardView: View {
     @State private var showReactionPicker = false
     @State private var showEmojiLibrary = false
     @State private var showAddToList = false
+    @State private var showQuoteCompose = false
+    @State private var showDeleteConfirm = false
+    @State private var actionAlert: ActionAlert?
     @State private var zapPollOptionIndex: Int? = nil
     @State private var noteListRepo = NoteListRepository.shared
     @State private var sourceTracker = NoteSourceTracker.shared
     @State private var engagementRepo = EngagementRepository.shared
+
+    private struct ActionAlert: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+    }
 
     private var myPubkey: String? { NostrKey.load()?.pubkey }
     private var iReactedEmoji: String? {
         guard let me = myPubkey,
               let counts = engagement else { return nil }
         return counts.reactors.first(where: { $0.pubkey == me })?.emoji
+    }
+    private var iReposted: Bool {
+        guard let me = myPubkey, let counts = engagement else { return false }
+        return counts.reposters.contains(me)
     }
 
     var body: some View {
@@ -172,6 +185,26 @@ struct PostCardView: View {
                 }
             }
         }
+        .sheet(isPresented: $showQuoteCompose) {
+            if let keypair = NostrKey.load() {
+                ComposeView(keypair: keypair, mode: .quote(resolveRepost().event))
+            }
+        }
+        .confirmationDialog(
+            "Delete this note?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                deleteNote(resolveRepost().event)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Publishes a NIP-09 deletion request. Relays may keep their copy.")
+        }
+        .alert(item: $actionAlert) { alert in
+            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+        }
     }
 
     // MARK: - Repost Banner
@@ -202,11 +235,7 @@ struct PostCardView: View {
             Spacer()
             heartAction
             Spacer()
-            actionItem(
-                icon: "arrow.2.squarepath",
-                count: engagement?.reposts,
-                tint: (engagement?.reposts ?? 0) > 0 ? Color.wispRepostColor : nil
-            )
+            repostAction
             Spacer()
             Button {
                 showZap = true
@@ -232,6 +261,8 @@ struct PostCardView: View {
             }
             .buttonStyle(.plain)
             Spacer()
+            overflowMenu
+            Spacer()
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
             } label: {
@@ -243,6 +274,111 @@ struct PostCardView: View {
             .buttonStyle(.plain)
         }
         .foregroundStyle(.secondary)
+    }
+
+    private var repostAction: some View {
+        let count = engagement?.reposts ?? 0
+        let tint: Color? = iReposted ? Color.wispRepostColor : (count > 0 ? Color.wispRepostColor : nil)
+        return Menu {
+            Button {
+                sendRepost()
+            } label: {
+                Label(iReposted ? "Reposted" : "Repost", systemImage: "arrow.2.squarepath")
+            }
+            .disabled(iReposted)
+
+            Button {
+                showQuoteCompose = true
+            } label: {
+                Label("Quote", systemImage: "quote.bubble")
+            }
+        } label: {
+            actionItem(icon: "arrow.2.squarepath", count: engagement?.reposts, tint: tint)
+        }
+        .menuStyle(.borderlessButton)
+    }
+
+    private var overflowMenu: some View {
+        let target = resolveRepost().event
+        let isMine = (myPubkey != nil) && (myPubkey == target.pubkey)
+        let shareItem = shareURI(for: target)
+        let threadRoot = Nip10.rootId(of: target) ?? target.id
+        let muteRepo = MuteRepository.shared
+        let userMuted = muteRepo.isBlocked(target.pubkey)
+        let threadMuted = muteRepo.isThreadMuted(threadRoot)
+
+        return Menu {
+            Button {
+                showAddToList = true
+            } label: {
+                Label("Add to List", systemImage: "bookmark")
+            }
+
+            if isMine {
+                Button {
+                    pinNote(target)
+                } label: {
+                    Label("Pin to Profile", systemImage: "pin")
+                }
+            }
+
+            if !isMine {
+                Button {
+                    if userMuted { muteRepo.unblockUser(target.pubkey) } else { muteRepo.blockUser(target.pubkey) }
+                } label: {
+                    Label(userMuted ? "Unmute User" : "Mute User", systemImage: "speaker.slash")
+                }
+
+                Button {
+                    if threadMuted { muteRepo.unmuteThread(threadRoot) } else { muteRepo.muteThread(threadRoot) }
+                } label: {
+                    Label(threadMuted ? "Unmute Thread" : "Mute Thread", systemImage: "bell.slash")
+                }
+            }
+
+            ShareLink(item: shareItem) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+
+            Button {
+                copyNoteId(target)
+            } label: {
+                Label("Copy Note ID", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                copyNoteJson(target)
+            } label: {
+                Label("Copy Note JSON", systemImage: "curlybraces")
+            }
+
+            Button {
+                copyNpub(target)
+            } label: {
+                Label("Copy npub", systemImage: "person.text.rectangle")
+            }
+
+            Button {
+                broadcast(target)
+            } label: {
+                Label("Broadcast", systemImage: "antenna.radiowaves.left.and.right")
+            }
+
+            if isMine {
+                Button(role: .destructive) {
+                    showDeleteConfirm = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15))
+                .frame(width: 24, height: 28)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .tint(.secondary)
     }
 
     private var heartAction: some View {
@@ -291,6 +427,92 @@ struct PostCardView: View {
                 NSLog("[Reaction] react failed: %@", String(describing: error))
             }
         }
+    }
+
+    private func sendRepost() {
+        guard let keypair = NostrKey.load() else { return }
+        let target = resolveRepost().event
+        Task {
+            do {
+                try await RepostSender.shared.repost(target, keypair: keypair)
+            } catch RepostSender.SendError.alreadyReposted {
+                // No-op: button is also disabled in this state.
+            } catch {
+                actionAlert = ActionAlert(title: "Repost failed", message: String(describing: error))
+            }
+        }
+    }
+
+    private func pinNote(_ target: NostrEvent) {
+        guard let keypair = NostrKey.load() else { return }
+        Task {
+            do {
+                _ = try await PinNoteSender.shared.setPinned(noteId: target.id, pinned: true, keypair: keypair)
+                actionAlert = ActionAlert(title: "Pinned", message: "Added to your profile pins.")
+            } catch {
+                actionAlert = ActionAlert(title: "Pin failed", message: String(describing: error))
+            }
+        }
+    }
+
+    private func deleteNote(_ target: NostrEvent) {
+        guard let keypair = NostrKey.load() else { return }
+        Task {
+            do {
+                try await DeletionSender.shared.delete(target, keypair: keypair)
+                actionAlert = ActionAlert(title: "Delete request sent", message: "Relays may take a moment to honor it.")
+            } catch {
+                actionAlert = ActionAlert(title: "Delete failed", message: String(describing: error))
+            }
+        }
+    }
+
+    private func broadcast(_ target: NostrEvent) {
+        guard let me = myPubkey else { return }
+        Task {
+            let writes = await RelayListRepository.shared.getWriteRelays(me)
+            var set = Set(writes)
+            if let board = RelayScoreBoard.load(pubkey: me) {
+                for entry in board.scoredRelays.prefix(5) { set.insert(entry.url) }
+            }
+            if set.isEmpty {
+                set = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
+            }
+            let succeeded = await RelayPool.publish(event: target, to: Array(set), timeout: 8)
+            actionAlert = ActionAlert(
+                title: succeeded.isEmpty ? "Broadcast failed" : "Broadcasted",
+                message: succeeded.isEmpty
+                    ? "No relays accepted the event."
+                    : "Re-published to \(succeeded.count) relay\(succeeded.count == 1 ? "" : "s")."
+            )
+        }
+    }
+
+    private func copyNoteId(_ target: NostrEvent) {
+        guard let bytes = Hex.decode(target.id),
+              let bech = Nip19.noteEncode(eventId: Array(bytes)) else { return }
+        UIPasteboard.general.string = bech
+    }
+
+    private func copyNpub(_ target: NostrEvent) {
+        guard let bytes = Hex.decode(target.pubkey),
+              let bech = Nip19.npubEncode(pubkey: Array(bytes)) else { return }
+        UIPasteboard.general.string = bech
+    }
+
+    private func copyNoteJson(_ target: NostrEvent) {
+        UIPasteboard.general.string = target.toJSON()
+    }
+
+    private func shareURI(for target: NostrEvent) -> String {
+        let relays = Array(NoteSourceTracker.shared.relays(for: target.id).prefix(2))
+        guard let idBytes = Hex.decode(target.id),
+              let authorBytes = Hex.decode(target.pubkey),
+              let nevent = Nip19.neventEncode(eventId32: Array(idBytes), relays: relays, author32: Array(authorBytes))
+        else {
+            return "https://wisp.talk/thread/\(target.id)"
+        }
+        return "https://wisp.talk/thread/\(nevent)"
     }
 
     private func combinedRelays(for eventId: String) -> [String] {
