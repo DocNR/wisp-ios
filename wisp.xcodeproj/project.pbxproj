@@ -229,6 +229,7 @@
 		4CFFAA0100000000000A0002 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFAA0000000000000A0002 /* Haptics.swift */; };
 		4CFFFA01000000000000F001 /* PowPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F001 /* PowPreferences.swift */; };
 		4CFFFA01000000000000F002 /* ProofOfWorkSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFFFA00000000000000F002 /* ProofOfWorkSettingsView.swift */; };
+		4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CABCD0000000000000F2005 /* ProfileQrSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -470,6 +471,7 @@
 		4CFFAA0000000000000A0002 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
 		4CFFFA00000000000000F001 /* PowPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowPreferences.swift; sourceTree = "<group>"; };
 		4CFFFA00000000000000F002 /* ProofOfWorkSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProofOfWorkSettingsView.swift; sourceTree = "<group>"; };
+		4CABCD0000000000000F2005 /* ProfileQrSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileQrSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -744,6 +746,7 @@
 				4CFF610000000000000A000C /* PollVoteSender.swift */,
 				4CFF610000000000000A000D /* RelayRouting.swift */,
 				4CFF610000000000000A000E /* PollOptionsEditor.swift */,
+				4CABCD0000000000000F2005 /* ProfileQrSheet.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1129,6 +1132,7 @@
 				4CFF610100000000000A000C /* PollVoteSender.swift in Sources */,
 				4CFF610100000000000A000D /* RelayRouting.swift in Sources */,
 				4CFF610100000000000A000E /* PollOptionsEditor.swift in Sources */,
+				4CABCD0100000000000F2005 /* ProfileQrSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

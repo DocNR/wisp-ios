@@ -140,7 +140,12 @@ struct SidebarDrawerView: View {
             await loadStatus()
         }
         .sheet(isPresented: $showQRSheet) {
-            qrSheet
+            ProfileQrSheet(
+                pubkey: pubkey,
+                displayName: displayName,
+                avatarUrl: profile?.picture,
+                lud16: profile?.lud16
+            )
         }
     }
 
@@ -381,62 +386,4 @@ struct SidebarDrawerView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - QR sheet
-
-    @State private var qrTab: Int = 0
-
-    private var qrSheet: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Text("Profile QR")
-                    .font(.headline)
-                Spacer()
-                Button("Done") { showQRSheet = false }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-
-            if (profile?.lud16) != nil {
-                Picker("", selection: $qrTab) {
-                    Text("Nostr").tag(0)
-                    Text("Lightning").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-            }
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.wispSurface)
-                    .frame(width: 240, height: 240)
-                Image(systemName: "qrcode")
-                    .font(.system(size: 200))
-                    .foregroundStyle(.secondary.opacity(0.6))
-            }
-            .padding(.vertical, 8)
-
-            Text(qrTab == 0 ? npub : (profile?.lud16 ?? ""))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .padding(.horizontal, 24)
-
-            Button {
-                UIPasteboard.general.string = qrTab == 0 ? npub : (profile?.lud16 ?? "")
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-                    .font(.system(size: 14, weight: .medium))
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 10)
-                    .background(Color.wispSurfaceVariant, in: Capsule())
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.wispBackground)
-        .presentationDetents([.medium, .large])
-    }
 }
