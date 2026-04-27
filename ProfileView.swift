@@ -9,6 +9,7 @@ struct ProfileView: View {
     @State private var showAddToList = false
     @State private var showQrSheet = false
     @State private var muteRepo = MuteRepository.shared
+    @Environment(\.dismiss) private var dismiss
 
     init(pubkey: String, activeUserPubkey: String) {
         self.pubkey = pubkey
@@ -25,20 +26,58 @@ struct ProfileView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 ProfileHeaderView(viewModel: viewModel)
-                Section {
-                    tabBody
-                } header: {
-                    ProfileTabBar(selected: $selectedTab)
-                        .background(Color.wispBackground)
-                }
+                tabBody
             }
         }
         .background(Color.wispBackground)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
+        // The whole top section (back/title/QR/ellipsis row + tab strip) lives in
+        // a single `.safeAreaInset` view with one `.regularMaterial` backdrop, so
+        // every control reads as one continuous unit and scrolling content blurs
+        // uniformly behind the entire header instead of through two stacked
+        // backdrop layers (nav-bar material + bar-button capsule blur + tab-strip
+        // material).
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            unifiedHeader
+        }
+        .sheet(isPresented: $showAddToList) {
+            if let keypair = NostrKey.load() {
+                NavigationStack {
+                    AddProfileToListSheet(keypair: keypair, targetPubkey: pubkey)
+                }
+            }
+        }
+        .sheet(isPresented: $showQrSheet) {
+            ProfileQrSheet(
+                pubkey: pubkey,
+                displayName: viewModel.profile?.displayString ?? shortKey(pubkey),
+                avatarUrl: viewModel.profile?.picture,
+                lud16: viewModel.profile?.lud16
+            )
+        }
+        .task { await viewModel.start() }
+        .task(id: selectedTab) {
+            await viewModel.loadTab(selectedTab)
+        }
+    }
+
+    private var unifiedHeader: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+
+                Spacer(minLength: 0)
+
                 EmojiText(
                     viewModel.profile?.displayString ?? shortKey(pubkey),
                     emojiMap: viewModel.profile?.emojiMap ?? [:],
@@ -47,17 +86,19 @@ struct ProfileView: View {
                     color: .label,
                     lineLimit: 1
                 )
-            }
-            ToolbarItem(placement: .topBarTrailing) {
+
+                Spacer(minLength: 0)
+
                 Button {
                     showQrSheet = true
                 } label: {
                     Image(systemName: "qrcode")
-                        .font(.system(size: 17))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
+
                 Menu {
                     ShareLink(item: shareURL) {
                         Label("Share Profile", systemImage: "square.and.arrow.up")
@@ -87,32 +128,18 @@ struct ProfileView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 17))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.primary)
-                }
-                .menuStyle(.borderlessButton)
-                .tint(.primary)
-            }
-        }
-        .sheet(isPresented: $showAddToList) {
-            if let keypair = NostrKey.load() {
-                NavigationStack {
-                    AddProfileToListSheet(keypair: keypair, targetPubkey: pubkey)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+
+            ProfileTabBar(selected: $selectedTab)
         }
-        .sheet(isPresented: $showQrSheet) {
-            ProfileQrSheet(
-                pubkey: pubkey,
-                displayName: viewModel.profile?.displayString ?? shortKey(pubkey),
-                avatarUrl: viewModel.profile?.picture,
-                lud16: viewModel.profile?.lud16
-            )
-        }
-        .task { await viewModel.start() }
-        .task(id: selectedTab) {
-            await viewModel.loadTab(selectedTab)
-        }
+        .background(.regularMaterial)
     }
 
     @ViewBuilder

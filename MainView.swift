@@ -350,7 +350,11 @@ struct MainView: View {
 
     private var mainShell: some View {
         VStack(spacing: 0) {
-            if selectedTab == .home {
+            // The custom home `topBar` lives outside the NavigationStack so its FAB +
+            // drawer button stay sticky on the feed root. Once the user navigates
+            // deeper (profile / thread / hashtag feed / etc.), the pushed view owns
+            // the toolbar — keep `topBar` only at depth 0 so two headers don't stack.
+            if selectedTab == .home, feedPath.isEmpty {
                 topBar
                 Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
             }
