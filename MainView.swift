@@ -448,6 +448,9 @@ struct MainView: View {
                             },
                             onDmTap: { _ in
                                 selectedTab = .messages
+                            },
+                            onNoteTap: { eventId in
+                                notificationsPath.append(ThreadRoute(eventId: eventId, authorPubkey: keypair.pubkey))
                             }
                         )
                         .navigationDestination(for: ProfileRoute.self) { route in

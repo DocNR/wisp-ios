@@ -5,6 +5,7 @@ struct NotificationRowView: View {
     let viewModel: NotificationsViewModel
     let onPeerTap: (String) -> Void
     let onDmTap: (String) -> Void
+    var onNoteTap: ((String) -> Void)? = nil
 
     @State private var expanded = false
     @State private var profiles: [String: ProfileData] = [:]
@@ -102,7 +103,7 @@ struct NotificationRowView: View {
 
     private func pollVotesExpansion(refId: String, votersByOptionId: [String: [String]]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            QuotedNoteView(eventId: refId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap)
+            QuotedNoteView(eventId: refId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap, onNoteTap: onNoteTap)
             // Resolve option labels from the cached poll event when available.
             let pollEvent = repo.event(forId: refId)
             let labelsById: [String: String] = {
@@ -133,7 +134,7 @@ struct NotificationRowView: View {
         reposters: [String]
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            QuotedNoteView(eventId: refId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap)
+            QuotedNoteView(eventId: refId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap, onNoteTap: onNoteTap)
             if !zaps.isEmpty {
                 let total = zaps.reduce(Int64(0)) { $0 + $1.sats }
                 Text("\(NotificationStyle.formatSats(total)) sats from \(zaps.count) zap\(zaps.count == 1 ? "" : "s")")
@@ -189,7 +190,7 @@ struct NotificationRowView: View {
                 Text("replying to your note")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                QuotedNoteView(eventId: refEventId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap)
+                QuotedNoteView(eventId: refEventId, relayHints: [], profiles: profiles, onProfileTap: onPeerTap, onNoteTap: onNoteTap)
             }
             if let actorEvent = repo.event(forId: replyEventId) {
                 PostCardView(
@@ -230,7 +231,7 @@ struct NotificationRowView: View {
                 Text("quoted your note")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                QuotedNoteView(eventId: quoteEventId, relayHints: hints, profiles: profiles, onProfileTap: onPeerTap)
+                QuotedNoteView(eventId: quoteEventId, relayHints: hints, profiles: profiles, onProfileTap: onPeerTap, onNoteTap: onNoteTap)
             }
             inlineReplyList(groupId: groupId)
             if let actor = repo.event(forId: actorEventId) {
