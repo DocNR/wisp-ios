@@ -99,15 +99,7 @@ struct ProfileView: View {
     private var unifiedHeader: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
+                BackChevronButton { dismiss() }
 
                 Spacer(minLength: 0)
 
