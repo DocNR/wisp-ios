@@ -34,7 +34,9 @@ struct SearchView: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            modePill
+            if !queryFocused {
+                modePill
+            }
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -67,18 +69,31 @@ struct SearchView: View {
             .padding(.vertical, 8)
             .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
 
-            Button {
-                viewModel.showAdvanced.toggle()
-            } label: {
-                Image(systemName: viewModel.showAdvanced ? "slider.horizontal.3" : "slider.horizontal.3")
-                    .font(.system(size: 18))
-                    .foregroundStyle(viewModel.showAdvanced ? Color.wispPrimary : .secondary)
-                    .frame(width: 32, height: 32)
+            if queryFocused {
+                // Standard iOS search-cancel affordance: appears only when
+                // the field is focused, dismisses the keyboard, and (if the
+                // query is empty) collapses any focus-only state.
+                Button("Cancel") {
+                    queryFocused = false
+                }
+                .font(.subheadline)
+                .foregroundStyle(Color.wispPrimary)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                Button {
+                    viewModel.showAdvanced.toggle()
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 18))
+                        .foregroundStyle(viewModel.showAdvanced ? Color.wispPrimary : .secondary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .animation(.easeInOut(duration: 0.2), value: queryFocused)
     }
 
     private var modePill: some View {
@@ -331,6 +346,7 @@ struct SearchView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 
