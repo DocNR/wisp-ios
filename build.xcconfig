@@ -1,0 +1,12 @@
+// Default signing for the wisp app target.
+//
+// Forks override these by creating `local.xcconfig` (gitignored) at the repo
+// root with their own DEVELOPMENT_TEAM and PRODUCT_BUNDLE_IDENTIFIER. Without
+// a local.xcconfig the build falls back to these upstream defaults.
+//
+// See `local.xcconfig.example` for the override template.
+
+DEVELOPMENT_TEAM = G738XL8P49
+PRODUCT_BUNDLE_IDENTIFIER = barrydeen.wisp
+
+#include? "local.xcconfig"

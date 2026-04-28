@@ -485,6 +485,8 @@
 		4CABCD0000000000000F2005 /* ProfileQrSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileQrSheet.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2006 /* KeysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeysSettingsView.swift; sourceTree = "<group>"; };
 		4CABCD0000000000000F2007 /* MediaGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaGridView.swift; sourceTree = "<group>"; };
+		4CABCD0000000000000F2008 /* build.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = build.xcconfig; sourceTree = "<group>"; };
+		4CABCD0000000000000F2009 /* local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = local.xcconfig.example; sourceTree = "<group>"; };
 		4CABCD000000000000010000 /* EventPublishNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventPublishNotification.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -767,6 +769,8 @@
 				4CABCD0000000000000F2005 /* ProfileQrSheet.swift */,
 				4CABCD0000000000000F2006 /* KeysSettingsView.swift */,
 				4CABCD0000000000000F2007 /* MediaGridView.swift */,
+				4CABCD0000000000000F2008 /* build.xcconfig */,
+				4CABCD0000000000000F2009 /* local.xcconfig.example */,
 				4CABCD000000000000010000 /* EventPublishNotification.swift */,
 			);
 			sourceTree = "<group>";
@@ -1312,12 +1316,12 @@
 		};
 		4CDA87CD2F9C4BC20079A1BA /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4CABCD0000000000000F2008 /* build.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = G738XL8P49;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -1340,7 +1344,6 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = barrydeen.wisp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -1358,12 +1361,12 @@
 		};
 		4CDA87CE2F9C4BC20079A1BA /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4CABCD0000000000000F2008 /* build.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = G738XL8P49;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -1386,7 +1389,6 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = barrydeen.wisp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;

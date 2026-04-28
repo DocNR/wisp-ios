@@ -1,0 +1,16 @@
+// Personal signing override. Copy this file to `local.xcconfig` (which is
+// gitignored) and replace the values with your own. The wisp target's
+// DEVELOPMENT_TEAM and PRODUCT_BUNDLE_IDENTIFIER will pick up your overrides
+// without you having to re-enter them in Xcode after every merge or pull.
+//
+// To find your DEVELOPMENT_TEAM:
+//   - Xcode → Settings → Accounts → click your Apple ID → click Manage
+//     Certificates / View Details, the Team ID is shown next to the team name.
+//   - Or run `security find-identity -v -p codesigning` in Terminal and look
+//     for the parenthesized ID after "Apple Development: …".
+//
+// PRODUCT_BUNDLE_IDENTIFIER must be unique to your team — Personal Teams
+// won't sign someone else's bundle id.
+
+DEVELOPMENT_TEAM = ABCDEFGHIJ
+PRODUCT_BUNDLE_IDENTIFIER = yourname.wisp
