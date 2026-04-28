@@ -758,16 +758,41 @@ struct PostCardView: View {
         let isRepost: Bool
     }
 
+    /// Process-wide cache for the JSON-parsed inner event of kind-6 reposts.
+    /// `resolveRepost()` is called many times per render (once in `body`, plus
+    /// indirectly via every computed property that reads `displayEventId`,
+    /// `myReactor`, `iReposted`, the action bar, the share menu, etc.). Re-
+    /// parsing the event JSON on each call is a measurable scroll-frame cost
+    /// in long threads. Event ids are immutable so caching is safe.
+    private final class InnerEventBox {
+        let event: NostrEvent
+        init(_ event: NostrEvent) { self.event = event }
+    }
+    private static let innerEventCache: NSCache<NSString, InnerEventBox> = {
+        let cache = NSCache<NSString, InnerEventBox>()
+        cache.countLimit = 256
+        return cache
+    }()
+
     private func resolveRepost() -> ResolvedPost {
-        if event.kind == 6, !event.content.isEmpty,
-           let data = event.content.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let inner = NostrEvent(json: json) {
-            return ResolvedPost(
-                event: inner,
-                profile: profiles[inner.pubkey] ?? ProfileRepository.shared.get(inner.pubkey),
-                isRepost: true
-            )
+        if event.kind == 6, !event.content.isEmpty {
+            let key = event.id as NSString
+            let inner: NostrEvent? = {
+                if let box = Self.innerEventCache.object(forKey: key) { return box.event }
+                guard let data = event.content.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let parsed = NostrEvent(json: json)
+                else { return nil }
+                Self.innerEventCache.setObject(InnerEventBox(parsed), forKey: key)
+                return parsed
+            }()
+            if let inner {
+                return ResolvedPost(
+                    event: inner,
+                    profile: profiles[inner.pubkey] ?? ProfileRepository.shared.get(inner.pubkey),
+                    isRepost: true
+                )
+            }
         }
         return ResolvedPost(
             event: event,

@@ -162,14 +162,12 @@ private struct MediaTileImage: View {
                     failure: { placeholder }
                 )
             } else {
-                AsyncImage(url: URL(string: item.url)) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        placeholder
-                    }
-                }
+                RetryingAsyncImage(
+                    url: URL(string: item.url),
+                    content: { image in image.resizable().scaledToFill() },
+                    loading: { placeholder },
+                    failure: { placeholder }
+                )
             }
         }
         .clipped()

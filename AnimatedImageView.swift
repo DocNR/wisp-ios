@@ -50,6 +50,16 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
             phase = .failure
             return
         }
+
+        // Decoded-payload cache hit: skip the loader entirely. This is what
+        // makes scrolled-back GIFs reappear instantly instead of flashing the
+        // placeholder while CGImageSource decodes the frame array again.
+        let key = url.absoluteString
+        if let cached = DecodedImageCache.animatedPayload(for: key) {
+            phase = .success(cached)
+            return
+        }
+
         phase = .loading
 
         let payload: AnimatedImagePayload? = await Task.detached(priority: .utility) {
@@ -63,6 +73,7 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
 
         if Task.isCancelled { return }
         if let payload {
+            DecodedImageCache.storeAnimated(payload, for: key)
             phase = .success(payload)
         } else {
             phase = .failure

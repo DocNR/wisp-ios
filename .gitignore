@@ -26,3 +26,5 @@ local.xcconfig
 
 ## ObjectBox generator backup
 model-wisp.json.bak
+## Local notes
+temp/

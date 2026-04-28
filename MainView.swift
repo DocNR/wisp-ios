@@ -820,7 +820,13 @@ struct MainView: View {
                             )
                             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
                         }
-                        ForEach(Array(viewModel.events.enumerated()), id: \.element.id) { index, event in
+                        // Iterating events directly with `id: \.id` keeps row
+                        // identity stable when the array shifts (new posts
+                        // prepended). The previous `Array(events.enumerated())`
+                        // wrapper changed every row's underlying tuple
+                        // identity on every prepend, forcing SwiftUI to
+                        // re-instantiate every visible PostCardView.
+                        ForEach(viewModel.events, id: \.id) { event in
                             NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
                                 PostCardView(
                                     event: event,
@@ -841,7 +847,8 @@ struct MainView: View {
                             .buttonStyle(.plain)
                             .onAppear {
                                 engagementRepo.markVisible(eventId: event.id, author: event.pubkey)
-                                if index >= viewModel.events.count - 5 {
+                                if let idx = viewModel.events.firstIndex(where: { $0.id == event.id }),
+                                   idx >= viewModel.events.count - 5 {
                                     switch viewModel.currentKind {
                                     case .follows: break
                                     case .relay, .relaySet, .extendedNetwork: viewModel.loadMore()

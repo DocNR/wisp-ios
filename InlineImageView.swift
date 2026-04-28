@@ -29,21 +29,32 @@ struct InlineImageView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { showFullScreen = true }
                 } else {
-                    AsyncImage(url: URL(string: meta.url)) { phase in
-                        switch phase {
-                        case .success(let image):
+                    RetryingAsyncImage(
+                        url: URL(string: meta.url),
+                        content: { image in
                             image.resizable()
                                 .aspectRatio(contentMode: .fit)
                                 .frame(maxWidth: .infinity)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .onTapGesture { showFullScreen = true }
-                        case .failure:
-                            placeholder(systemName: "photo", height: 200)
-                        default:
+                        },
+                        loading: {
                             placeholder(systemName: nil, height: height)
                                 .overlay { ProgressView() }
+                        },
+                        failure: {
+                            placeholder(systemName: "photo", height: 200)
+                                .overlay {
+                                    VStack(spacing: 4) {
+                                        Image(systemName: "arrow.clockwise")
+                                            .font(.title3)
+                                        Text("Tap to retry")
+                                            .font(.caption2)
+                                    }
+                                    .foregroundStyle(.secondary)
+                                }
                         }
-                    }
+                    )
                 }
             } else {
                 Button {
@@ -120,18 +131,26 @@ struct FullScreenImageView: View {
                 .gesture(zoomGesture)
                 .onTapGesture(count: 2) { toggleZoom() }
             } else {
-                AsyncImage(url: URL(string: url)) { phase in
-                    switch phase {
-                    case .success(let image):
+                RetryingAsyncImage(
+                    url: URL(string: url),
+                    content: { image in
                         image.resizable()
                             .scaledToFit()
                             .scaleEffect(scale)
                             .gesture(zoomGesture)
                             .onTapGesture(count: 2) { toggleZoom() }
-                    default:
-                        ProgressView().tint(.white)
+                    },
+                    loading: { ProgressView().tint(.white) },
+                    failure: {
+                        VStack(spacing: 8) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.largeTitle)
+                            Text("Tap to retry")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.white)
                     }
-                }
+                )
             }
 
             if showsCloseButton {
