@@ -13,6 +13,9 @@ DerivedData/
 wisp/Resources/breez-api-key.txt
 wisp/Resources/giphy-api-key.txt
 
+## Per-developer signing override (see local.xcconfig.example)
+local.xcconfig
+
 ## macOS
 .DS_Store
 
