@@ -19,8 +19,25 @@ struct InlineVideoView: View {
     @State private var showFullScreen = false
     @State private var muteState = GlobalVideoMute.shared
 
-    private var aspectRatio: CGFloat {
+    /// Source aspect ratio (W / H) parsed from the imeta `dim` tag, with a
+    /// 16:9 fallback. Tall portraits report something like 9/16 ≈ 0.56.
+    private var nativeAspect: CGFloat {
         ContentParser.parseAspectRatio(meta.dimension) ?? (16.0 / 9.0)
+    }
+
+    /// Floor on the rendered box's aspect ratio (W / H). Sources taller than
+    /// this — typical 9:16 phone video — get clamped so the player fills full
+    /// card width without rendering at near-double width tall. Content is
+    /// cropped (resizeAspectFill) so there are no black bars on the sides.
+    /// Landscape and squarish sources render at their native aspect.
+    private let minDisplayAspect: CGFloat = 4.0 / 5.0
+
+    private var displayAspect: CGFloat {
+        max(nativeAspect, minDisplayAspect)
+    }
+
+    private var videoGravity: AVLayerVideoGravity {
+        nativeAspect < minDisplayAspect ? .resizeAspectFill : .resizeAspect
     }
 
     var body: some View {
@@ -29,7 +46,7 @@ struct InlineVideoView: View {
                 .fill(Color.black)
 
             if loaded, let player {
-                VideoPlayer(player: player)
+                CroppingVideoPlayer(player: player, gravity: videoGravity)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onAppear {
                         MediaAudioSession.activatePlayback()
@@ -95,7 +112,7 @@ struct InlineVideoView: View {
                 }
             }
         }
-        .aspectRatio(aspectRatio, contentMode: .fit)
+        .aspectRatio(displayAspect, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .fullScreenCover(isPresented: $showFullScreen) {
@@ -108,6 +125,33 @@ struct InlineVideoView: View {
         let p = AVPlayer(url: url)
         p.isMuted = muteState.isMuted
         player = p
+    }
+}
+
+/// `AVPlayerLayer` wrapper that exposes `videoGravity` (which `VideoPlayer`
+/// does not). Used by `InlineVideoView` so portrait sources can fill the
+/// rendered box via `.resizeAspectFill` instead of letterboxing.
+struct CroppingVideoPlayer: UIViewRepresentable {
+    let player: AVPlayer
+    let gravity: AVLayerVideoGravity
+
+    func makeUIView(context: Context) -> PlayerView {
+        let view = PlayerView()
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = gravity
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
+        uiView.playerLayer.videoGravity = gravity
+    }
+
+    final class PlayerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     }
 }
 
