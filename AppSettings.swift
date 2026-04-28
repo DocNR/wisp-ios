@@ -25,6 +25,7 @@ final class AppSettings {
         static let accentColorARGB = "wisp_settings_accent_color_argb"
         static let autoLoadMedia = "wisp_settings_auto_load_media"
         static let videoAutoplay = "wisp_settings_video_autoplay"
+        static let animateAvatars = "wisp_settings_animate_avatars"
         static let mediaLayoutStyle = "wisp_settings_media_layout_style"
         static let clientTagEnabled = "wisp_settings_client_tag_enabled"
         static let fiatModeEnabled = "wisp_settings_fiat_mode_enabled"
@@ -52,6 +53,9 @@ final class AppSettings {
     var videoAutoplay: Bool {
         didSet { UserDefaults.standard.set(videoAutoplay, forKey: Keys.videoAutoplay) }
     }
+    var animateAvatars: Bool {
+        didSet { UserDefaults.standard.set(animateAvatars, forKey: Keys.animateAvatars) }
+    }
     var mediaLayoutStyle: MediaLayoutStyle {
         didSet { UserDefaults.standard.set(mediaLayoutStyle.rawValue, forKey: Keys.mediaLayoutStyle) }
     }
@@ -77,6 +81,7 @@ final class AppSettings {
         self.accentColorARGB = defaults.object(forKey: Keys.accentColorARGB) as? Int ?? Self.defaultAccentARGB
         self.autoLoadMedia = defaults.object(forKey: Keys.autoLoadMedia) as? Bool ?? true
         self.videoAutoplay = defaults.object(forKey: Keys.videoAutoplay) as? Bool ?? true
+        self.animateAvatars = defaults.object(forKey: Keys.animateAvatars) as? Bool ?? true
         let layoutRaw = defaults.string(forKey: Keys.mediaLayoutStyle) ?? MediaLayoutStyle.grid.rawValue
         self.mediaLayoutStyle = MediaLayoutStyle(rawValue: layoutRaw) ?? .grid
         self.clientTagEnabled = defaults.object(forKey: Keys.clientTagEnabled) as? Bool ?? true
