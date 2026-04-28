@@ -13,19 +13,44 @@ struct PostCardView: View {
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
-    @State private var showZap = false
     @State private var expanded = false
+    @State private var contentExpanded = false
     @State private var showReactionPicker = false
     @State private var showEmojiLibrary = false
-    @State private var showAddToList = false
-    @State private var showQuoteCompose = false
-    @State private var showReplyCompose = false
     @State private var showDeleteConfirm = false
     @State private var actionAlert: ActionAlert?
+    /// Single source of truth for every body-level sheet on the card. Stacking
+    /// multiple `.sheet(isPresented:)` modifiers on the same view is a known
+    /// SwiftUI antipattern that loops on real devices — a sheet's `dismiss()`
+    /// races with sibling presentations and the binding flips back, repeatedly
+    /// reopening the just-published reply / zap. One `.sheet(item:)` keyed on
+    /// this enum sidesteps the conflict.
+    @State private var activeSheet: ActiveSheet?
+
+    private enum ActiveSheet: Identifiable {
+        case zap
+        case addToList
+        case quoteCompose
+        case replyCompose
+
+        var id: Int {
+            switch self {
+            case .zap: return 0
+            case .addToList: return 1
+            case .quoteCompose: return 2
+            case .replyCompose: return 3
+            }
+        }
+    }
     @State private var zapPollOptionIndex: Int? = nil
     @State private var noteListRepo = NoteListRepository.shared
     @State private var sourceTracker = NoteSourceTracker.shared
     @State private var engagementRepo = EngagementRepository.shared
+
+    /// Threshold above which a kind-1 body gets a "Show more" toggle. Tuned for
+    /// roughly the height of a 12-line post — anything longer dominates the feed.
+    private static let longPostCharThreshold = 600
+    private static let longPostCollapsedHeight: CGFloat = 280
 
     private struct ActionAlert: Identifiable {
         let id = UUID()
@@ -34,14 +59,40 @@ struct PostCardView: View {
     }
 
     private var myPubkey: String? { NostrKey.load()?.pubkey }
+
+    /// Event id reactions and reposts target — the inner note for kind-6
+    /// reposts, otherwise the post's own id. ReactionSender / RepostSender
+    /// write optimistic state to `EngagementRepository.shared.counts[<this>]`.
+    private var displayEventId: String { resolveRepost().event.id }
+
     private var myReactor: Reactor? {
-        guard let me = myPubkey, let counts = engagement else { return nil }
-        return counts.reactors.first(where: { $0.pubkey == me })
+        guard let me = myPubkey else { return nil }
+        // Thread / profile / search views maintain their own engagement dicts
+        // separate from `EngagementRepository`. ReactionSender writes only to
+        // the shared repo, so the parent-passed `engagement` won't reflect the
+        // user's just-sent reaction in those views. Read the shared repo first
+        // so the heart updates immediately everywhere.
+        if let mine = engagementRepo.counts[displayEventId]?.reactors.first(where: { $0.pubkey == me }) {
+            return mine
+        }
+        return engagement?.reactors.first(where: { $0.pubkey == me })
     }
     private var iReactedEmoji: String? { myReactor?.emoji }
     private var iReposted: Bool {
-        guard let me = myPubkey, let counts = engagement else { return false }
-        return counts.reposters.contains(me)
+        guard let me = myPubkey else { return false }
+        if engagementRepo.counts[displayEventId]?.reposters.contains(me) == true { return true }
+        return engagement?.reposters.contains(me) == true
+    }
+
+    /// Engagement counts merged across the parent-passed `engagement` and the
+    /// shared optimistic state in `EngagementRepository`. Keeps reaction /
+    /// repost counters in sync with `iReactedEmoji` / `iReposted` so the
+    /// number bumps the moment the user reacts in any view, not just the feed.
+    private var resolvedReactionCount: Int {
+        max(engagement?.reactions ?? 0, engagementRepo.counts[displayEventId]?.reactions ?? 0)
+    }
+    private var resolvedRepostCount: Int {
+        max(engagement?.reposts ?? 0, engagementRepo.counts[displayEventId]?.reposts ?? 0)
     }
     /// The user's reacted emoji as a displayable Unicode character, or nil for shortcode
     /// reactions (which the heart action renders as an inline image instead) or no
@@ -118,14 +169,46 @@ struct PostCardView: View {
             // the screen's right edge. Matches the Android client's layout.
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
-                    RichContentView(
-                        content: displayEvent.content,
-                        tags: displayEvent.tags,
-                        profiles: profiles,
-                        onProfileTap: onProfileTap,
-                        onNoteTap: onNoteTap,
-                        onHashtagTap: onHashtagTap
-                    )
+                    let isLong = displayEvent.content.count > Self.longPostCharThreshold
+                    let collapsed = isLong && !contentExpanded
+                    VStack(alignment: .leading, spacing: 6) {
+                        RichContentView(
+                            content: displayEvent.content,
+                            tags: displayEvent.tags,
+                            profiles: profiles,
+                            onProfileTap: onProfileTap,
+                            onNoteTap: onNoteTap,
+                            onHashtagTap: onHashtagTap
+                        )
+                        .frame(
+                            maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .overlay(alignment: .bottom) {
+                            if collapsed {
+                                LinearGradient(
+                                    colors: [Color.wispBackground.opacity(0), Color.wispBackground],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .frame(height: 48)
+                                .allowsHitTesting(false)
+                            }
+                        }
+                        if isLong {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    contentExpanded.toggle()
+                                }
+                            } label: {
+                                Text(contentExpanded ? "Show less" : "Show more")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.wispPrimary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
 
                 if displayEvent.kind == Nip88.kindPoll || displayEvent.kind == Nip69.kindZapPoll {
@@ -134,7 +217,7 @@ struct PostCardView: View {
                         onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
                         onZapVote: { idx in
                             zapPollOptionIndex = idx
-                            showZap = true
+                            activeSheet = .zap
                         }
                     )
                 }
@@ -175,54 +258,54 @@ struct PostCardView: View {
                 PollTallyRepository.shared.markVisible(pollEvent: displayed)
             }
         }
-        .sheet(isPresented: $showZap) {
-            if let store = walletStore {
-                let target = resolveRepost().event
-                let targetProfile = resolveRepost().profile
-                let extraTags: [[String]] = zapPollOptionIndex.map { [["poll_option", String($0)]] } ?? []
-                let pollOptionIdx = zapPollOptionIndex
-                ZapSheet(
-                    store: store,
-                    recipientPubkey: target.pubkey,
-                    recipientLud16: targetProfile?.lud16,
-                    recipientName: targetProfile?.displayString,
-                    eventId: target.id,
-                    extraTags: extraTags,
-                    onSuccess: { sats in
-                        if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx,
-                           let me = NostrKey.load() {
-                            PollTallyRepository.shared.applyOptimisticZapVote(
-                                pollEvent: target,
-                                optionIndex: idx,
-                                voterPubkey: me.pubkey,
-                                sats: sats,
-                                ts: Int(Date().timeIntervalSince1970)
-                            )
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .zap:
+                if let store = walletStore {
+                    let target = resolveRepost().event
+                    let targetProfile = resolveRepost().profile
+                    let extraTags: [[String]] = zapPollOptionIndex.map { [["poll_option", String($0)]] } ?? []
+                    let pollOptionIdx = zapPollOptionIndex
+                    ZapSheet(
+                        store: store,
+                        recipientPubkey: target.pubkey,
+                        recipientLud16: targetProfile?.lud16,
+                        recipientName: targetProfile?.displayString,
+                        eventId: target.id,
+                        extraTags: extraTags,
+                        onSuccess: { sats in
+                            if target.kind == Nip69.kindZapPoll, let idx = pollOptionIdx,
+                               let me = NostrKey.load() {
+                                PollTallyRepository.shared.applyOptimisticZapVote(
+                                    pollEvent: target,
+                                    optionIndex: idx,
+                                    voterPubkey: me.pubkey,
+                                    sats: sats,
+                                    ts: Int(Date().timeIntervalSince1970)
+                                )
+                            }
+                        },
+                        dismiss: {
+                            activeSheet = nil
+                            zapPollOptionIndex = nil
                         }
-                    },
-                    dismiss: {
-                        showZap = false
-                        zapPollOptionIndex = nil
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: $showAddToList) {
-            if let keypair = NostrKey.load() {
-                NavigationStack {
-                    AddToNoteListSheet(keypair: keypair, event: resolveRepost().event)
+                    )
                 }
-            }
-        }
-        .sheet(isPresented: $showQuoteCompose) {
-            if let keypair = NostrKey.load() {
-                ComposeView(keypair: keypair, mode: .quote(resolveRepost().event))
-            }
-        }
-        .sheet(isPresented: $showReplyCompose) {
-            if let keypair = NostrKey.load() {
-                let target = resolveRepost().event
-                ComposeView(keypair: keypair, mode: .reply(parent: target, root: replyRootStub(for: target)))
+            case .addToList:
+                if let keypair = NostrKey.load() {
+                    NavigationStack {
+                        AddToNoteListSheet(keypair: keypair, event: resolveRepost().event)
+                    }
+                }
+            case .quoteCompose:
+                if let keypair = NostrKey.load() {
+                    ComposeView(keypair: keypair, mode: .quote(resolveRepost().event))
+                }
+            case .replyCompose:
+                if let keypair = NostrKey.load() {
+                    let target = resolveRepost().event
+                    ComposeView(keypair: keypair, mode: .reply(parent: target, root: replyRootStub(for: target)))
+                }
             }
         }
         .confirmationDialog(
@@ -267,7 +350,7 @@ struct PostCardView: View {
     private var actionBar: some View {
         HStack(spacing: 0) {
             Button {
-                showReplyCompose = true
+                activeSheet = .replyCompose
             } label: {
                 actionItem(icon: "bubble.right", count: engagement?.replies)
             }
@@ -278,7 +361,7 @@ struct PostCardView: View {
             repostAction
             Spacer()
             Button {
-                showZap = true
+                activeSheet = .zap
             } label: {
                 actionItem(
                     icon: "bolt.fill",
@@ -289,7 +372,7 @@ struct PostCardView: View {
             .buttonStyle(.plain)
             Spacer()
             Button {
-                showAddToList = true
+                activeSheet = .addToList
             } label: {
                 let target = resolveRepost().event
                 let isBookmarked = !noteListRepo.listsContaining(noteId: target.id).isEmpty
@@ -317,7 +400,7 @@ struct PostCardView: View {
     }
 
     private var repostAction: some View {
-        let count = engagement?.reposts ?? 0
+        let count = resolvedRepostCount
         let tint: Color? = iReposted ? Color.wispRepostColor : (count > 0 ? Color.wispRepostColor : nil)
         return Menu {
             Button {
@@ -328,12 +411,12 @@ struct PostCardView: View {
             .disabled(iReposted)
 
             Button {
-                showQuoteCompose = true
+                activeSheet = .quoteCompose
             } label: {
                 Label("Quote", systemImage: "quote.bubble")
             }
         } label: {
-            actionItem(icon: "arrow.2.squarepath", count: engagement?.reposts, tint: tint)
+            actionItem(icon: "arrow.2.squarepath", count: count > 0 ? count : nil, tint: tint)
         }
         .menuStyle(.borderlessButton)
     }
@@ -349,7 +432,7 @@ struct PostCardView: View {
 
         return Menu {
             Button {
-                showAddToList = true
+                activeSheet = .addToList
             } label: {
                 Label("Add to List", systemImage: "bookmark")
             }
@@ -431,8 +514,8 @@ struct PostCardView: View {
                 HStack(spacing: 4) {
                     Text(emoji)
                         .font(.system(size: 16))
-                    if let count = engagement?.reactions, count > 0 {
-                        Text(formatCount(count))
+                    if resolvedReactionCount > 0 {
+                        Text(formatCount(resolvedReactionCount))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -457,7 +540,7 @@ struct PostCardView: View {
             } else {
                 actionItem(
                     icon: iReactedEmoji != nil ? "heart.fill" : "heart",
-                    count: engagement?.reactions,
+                    count: resolvedReactionCount > 0 ? resolvedReactionCount : nil,
                     tint: iReactedEmoji != nil ? .pink : nil
                 )
             }
