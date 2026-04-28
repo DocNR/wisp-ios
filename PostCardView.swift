@@ -40,14 +40,40 @@ struct PostCardView: View {
     }
 
     private var myPubkey: String? { NostrKey.load()?.pubkey }
+
+    /// Event id reactions and reposts target — the inner note for kind-6
+    /// reposts, otherwise the post's own id. ReactionSender / RepostSender
+    /// write optimistic state to `EngagementRepository.shared.counts[<this>]`.
+    private var displayEventId: String { resolveRepost().event.id }
+
     private var myReactor: Reactor? {
-        guard let me = myPubkey, let counts = engagement else { return nil }
-        return counts.reactors.first(where: { $0.pubkey == me })
+        guard let me = myPubkey else { return nil }
+        // Thread / profile / search views maintain their own engagement dicts
+        // separate from `EngagementRepository`. ReactionSender writes only to
+        // the shared repo, so the parent-passed `engagement` won't reflect the
+        // user's just-sent reaction in those views. Read the shared repo first
+        // so the heart updates immediately everywhere.
+        if let mine = engagementRepo.counts[displayEventId]?.reactors.first(where: { $0.pubkey == me }) {
+            return mine
+        }
+        return engagement?.reactors.first(where: { $0.pubkey == me })
     }
     private var iReactedEmoji: String? { myReactor?.emoji }
     private var iReposted: Bool {
-        guard let me = myPubkey, let counts = engagement else { return false }
-        return counts.reposters.contains(me)
+        guard let me = myPubkey else { return false }
+        if engagementRepo.counts[displayEventId]?.reposters.contains(me) == true { return true }
+        return engagement?.reposters.contains(me) == true
+    }
+
+    /// Engagement counts merged across the parent-passed `engagement` and the
+    /// shared optimistic state in `EngagementRepository`. Keeps reaction /
+    /// repost counters in sync with `iReactedEmoji` / `iReposted` so the
+    /// number bumps the moment the user reacts in any view, not just the feed.
+    private var resolvedReactionCount: Int {
+        max(engagement?.reactions ?? 0, engagementRepo.counts[displayEventId]?.reactions ?? 0)
+    }
+    private var resolvedRepostCount: Int {
+        max(engagement?.reposts ?? 0, engagementRepo.counts[displayEventId]?.reposts ?? 0)
     }
     /// The user's reacted emoji as a displayable Unicode character, or nil for shortcode
     /// reactions (which the heart action renders as an inline image instead) or no
@@ -355,7 +381,7 @@ struct PostCardView: View {
     }
 
     private var repostAction: some View {
-        let count = engagement?.reposts ?? 0
+        let count = resolvedRepostCount
         let tint: Color? = iReposted ? Color.wispRepostColor : (count > 0 ? Color.wispRepostColor : nil)
         return Menu {
             Button {
@@ -371,7 +397,7 @@ struct PostCardView: View {
                 Label("Quote", systemImage: "quote.bubble")
             }
         } label: {
-            actionItem(icon: "arrow.2.squarepath", count: engagement?.reposts, tint: tint)
+            actionItem(icon: "arrow.2.squarepath", count: count > 0 ? count : nil, tint: tint)
         }
         .menuStyle(.borderlessButton)
     }
@@ -469,8 +495,8 @@ struct PostCardView: View {
                 HStack(spacing: 4) {
                     Text(emoji)
                         .font(.system(size: 16))
-                    if let count = engagement?.reactions, count > 0 {
-                        Text(formatCount(count))
+                    if resolvedReactionCount > 0 {
+                        Text(formatCount(resolvedReactionCount))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -495,7 +521,7 @@ struct PostCardView: View {
             } else {
                 actionItem(
                     icon: iReactedEmoji != nil ? "heart.fill" : "heart",
-                    count: engagement?.reactions,
+                    count: resolvedReactionCount > 0 ? resolvedReactionCount : nil,
                     tint: iReactedEmoji != nil ? .pink : nil
                 )
             }
