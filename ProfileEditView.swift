@@ -12,6 +12,7 @@ struct ProfileEditView: View {
     var onSaved: (ProfileData) -> Void = { _ in }
 
     @State private var viewModel: ProfileEditViewModel
+    @State private var advancedExpanded = false
     @Environment(\.dismiss) private var dismiss
 
     init(keypair: Keypair, onSaved: @escaping (ProfileData) -> Void = { _ in }) {
@@ -169,10 +170,37 @@ struct ProfileEditView: View {
                 .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
         }
 
-        field(label: "Picture URL", text: $viewModel.picture, placeholder: "https://…", keyboard: .URL, autocaps: false)
-        field(label: "Banner URL", text: $viewModel.banner, placeholder: "https://…", keyboard: .URL, autocaps: false)
         field(label: "NIP-05", text: $viewModel.nip05, placeholder: "you@example.com", keyboard: .emailAddress, autocaps: false)
         field(label: "Lightning Address", text: $viewModel.lud16, placeholder: "you@walletofsatoshi.com", keyboard: .emailAddress, autocaps: false)
+
+        advancedSection
+    }
+
+    private var advancedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { advancedExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Advanced")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Image(systemName: advancedExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if advancedExpanded {
+                field(label: "Picture URL", text: $viewModel.picture, placeholder: "https://…", keyboard: .URL, autocaps: false)
+                field(label: "Banner URL", text: $viewModel.banner, placeholder: "https://…", keyboard: .URL, autocaps: false)
+            }
+        }
+        .padding(.top, 8)
     }
 
     private func field(

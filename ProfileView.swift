@@ -233,7 +233,9 @@ private struct ProfileHeaderView: View {
                             .foregroundStyle(.primary)
                     }
                     .buttonStyle(.plain)
-                    .offset(y: -2)
+                    // Match the avatar's `offset(y: -28)` so the pill's bottom
+                    // edge sits on the same shelf as the avatar's bottom edge.
+                    .offset(y: -28)
                 } else if viewModel.followsYou {
                     Text("Follows you")
                         .font(.caption.weight(.medium))
