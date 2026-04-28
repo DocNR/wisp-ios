@@ -5,6 +5,9 @@ struct ThreadView: View {
     @State private var showError: Bool = false
     @State private var showHiddenSpam: Bool = false
     @State private var showReplyCompose: Bool = false
+    /// True once we've auto-scrolled to the seed event id. Stops the scroll
+    /// from re-firing every time the reply tree updates.
+    @State private var didScrollToSeed: Bool = false
 
     init(seedEventId: String, authorHint: String?, keypair: Keypair) {
         _viewModel = State(initialValue: ThreadViewModel(
@@ -16,40 +19,50 @@ struct ThreadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if let root = viewModel.rootEvent {
-                        PostCardView(
-                            event: root,
-                            profile: viewModel.profiles[root.pubkey],
-                            profiles: viewModel.profiles,
-                            engagement: viewModel.engagement[root.id],
-                            onProfileTap: { _ in },
-                            onNoteTap: { _ in },
-                            onHashtagTap: { _ in }
-                        )
-                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
-                    } else if viewModel.isLoading {
-                        loadingHeader
-                    }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if let root = viewModel.rootEvent {
+                            PostCardView(
+                                event: root,
+                                profile: viewModel.profiles[root.pubkey],
+                                profiles: viewModel.profiles,
+                                engagement: viewModel.engagement[root.id],
+                                onProfileTap: { _ in },
+                                onNoteTap: { _ in },
+                                onHashtagTap: { _ in }
+                            )
+                            .id(root.id)
+                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        } else if viewModel.isLoading {
+                            loadingHeader
+                        }
 
-                    ForEach(viewModel.flat) { row in
-                        replyRow(row)
-                        Divider()
-                            .overlay(Color.wispSurfaceVariant.opacity(0.3))
-                            .padding(.leading, indent(for: row.depth))
-                    }
+                        ForEach(viewModel.flat) { row in
+                            replyRow(row)
+                                .id(row.event.id)
+                            Divider()
+                                .overlay(Color.wispSurfaceVariant.opacity(0.3))
+                                .padding(.leading, indent(for: row.depth))
+                        }
 
-                    if !viewModel.hiddenSpamReplies.isEmpty {
-                        hiddenSpamSection
-                    }
+                        if !viewModel.hiddenSpamReplies.isEmpty {
+                            hiddenSpamSection
+                        }
 
-                    if !viewModel.isLoading && viewModel.flat.isEmpty && viewModel.rootEvent != nil {
-                        emptyState
+                        if !viewModel.isLoading && viewModel.flat.isEmpty && viewModel.rootEvent != nil {
+                            emptyState
+                        }
                     }
                 }
+                .refreshable { await viewModel.refresh() }
+                .onChange(of: viewModel.rootEvent?.id) { _, _ in
+                    scrollToSeedIfNeeded(proxy: proxy)
+                }
+                .onChange(of: viewModel.flat.count) { _, _ in
+                    scrollToSeedIfNeeded(proxy: proxy)
+                }
             }
-            .refreshable { await viewModel.refresh() }
 
             composer
         }
@@ -169,6 +182,30 @@ struct ThreadView: View {
 
     private func indent(for depth: Int) -> CGFloat {
         CGFloat(min(depth, 8)) * 12
+    }
+
+    /// Scrolls the thread to the seed event id (the specific reply / mention
+    /// the user navigated from — typically a notification tap). Fires only
+    /// once per thread session and only after the seed is actually rendered
+    /// in the LazyVStack, so the scroll target exists.
+    private func scrollToSeedIfNeeded(proxy: ScrollViewProxy) {
+        guard !didScrollToSeed else { return }
+        let seed = viewModel.seedEventId
+        // Already at the top — the root is the seed, no scroll needed.
+        if seed == viewModel.rootId || seed == viewModel.rootEvent?.id {
+            didScrollToSeed = true
+            return
+        }
+        // Wait until the seed event has been ingested into the visible tree
+        // before trying to scroll, otherwise `proxy.scrollTo` is a no-op.
+        let seedRendered = viewModel.flat.contains(where: { $0.event.id == seed })
+        guard seedRendered else { return }
+        didScrollToSeed = true
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo(seed, anchor: .top)
+            }
+        }
     }
 
     /// Tap-to-open affordance that hands off to the full ComposeView in `.reply` mode.
