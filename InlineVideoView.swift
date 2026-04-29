@@ -7,7 +7,12 @@ import Observation
 @Observable
 final class GlobalVideoMute {
     static let shared = GlobalVideoMute()
-    var isMuted: Bool = true
+    /// URL of the *single* video currently allowed to emit audio. `nil`
+    /// means every InlineVideoView is muted (the default). Tapping unmute
+    /// on a video sets this to that video's URL, which auto-mutes any
+    /// other video that happens to be on screen — feed posts with two
+    /// videos in view shouldn't play overlapping audio.
+    var unmutedUrl: String? = nil
     private init() {}
 }
 
@@ -51,6 +56,11 @@ struct InlineVideoView: View {
         resolvedAspect < minDisplayAspect ? .resizeAspectFill : .resizeAspect
     }
 
+    /// True when this view's video should be silent. Derived from the global
+    /// "single unmuted video" state so two visible feed videos can't both
+    /// play audio at once.
+    private var isMuted: Bool { muteState.unmutedUrl != meta.url }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12)
@@ -61,14 +71,14 @@ struct InlineVideoView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onAppear {
                         MediaAudioSession.activatePlayback()
-                        player.isMuted = muteState.isMuted
+                        player.isMuted = isMuted
                         player.play()
                     }
                     .onDisappear {
                         player.pause()
                     }
-                    .onChange(of: muteState.isMuted) { _, newValue in
-                        player.isMuted = newValue
+                    .onChange(of: muteState.unmutedUrl) { _, _ in
+                        player.isMuted = isMuted
                     }
 
                 VStack {
@@ -76,9 +86,14 @@ struct InlineVideoView: View {
                     HStack {
                         Spacer()
                         Button {
-                            muteState.isMuted.toggle()
+                            // Tapping the speaker on a muted video promotes
+                            // it to the global unmuted slot (auto-muting any
+                            // other video). Tapping again (now unmuted)
+                            // clears the slot, returning every video to
+                            // muted.
+                            muteState.unmutedUrl = isMuted ? meta.url : nil
                         } label: {
-                            Image(systemName: muteState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                 .font(.system(size: 14))
                                 .foregroundStyle(.white)
                                 .padding(8)
@@ -86,6 +101,12 @@ struct InlineVideoView: View {
                         }
 
                         Button {
+                            // Pause the inline player before the fullscreen
+                            // cover takes over. SwiftUI keeps the underlying
+                            // view alive when a fullScreenCover presents, so
+                            // the inline `onDisappear` doesn't fire and both
+                            // players would otherwise emit audio at once.
+                            player.pause()
                             showFullScreen = true
                         } label: {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -126,7 +147,14 @@ struct InlineVideoView: View {
         .aspectRatio(displayAspect, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .fullScreenCover(isPresented: $showFullScreen) {
+        .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
+            // Resume the inline player on dismiss only when autoplay is on,
+            // so users who disabled autoplay aren't surprised by audio
+            // restarting in the feed.
+            if settings.autoLoadMedia && settings.videoAutoplay {
+                player?.play()
+            }
+        }) {
             FullScreenVideoView(url: meta.url)
         }
     }
@@ -134,7 +162,7 @@ struct InlineVideoView: View {
     private func initPlayer() {
         guard let url = URL(string: meta.url) else { return }
         let p = AVPlayer(url: url)
-        p.isMuted = muteState.isMuted
+        p.isMuted = isMuted
         player = p
         Task { await detectAspect(for: p.currentItem) }
     }
