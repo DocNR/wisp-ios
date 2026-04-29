@@ -98,7 +98,7 @@ final class MuteRepository {
         blockedPubkeys.insert(normalized)
         commitChange()
         // Drop their entries from the in-memory notification state immediately
-        // — without this, single-actor groups (`mleku replied`) and multi-actor
+        // — without this, single-actor groups (`user replied`) and multi-actor
         // reaction groups linger in the UI until the next cold launch even
         // though SafetyFilter would now drop them.
         NotificationRepository.shared.purgeAuthor(normalized)

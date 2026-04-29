@@ -429,7 +429,7 @@ final class NotificationRepository {
 
     /// Drop every trace of `pubkey` from the in-memory notification state.
     /// Called when the user blocks someone — without this, single-actor
-    /// notifications they triggered (`mleku quoted`, `mleku replied`) plus their
+    /// notifications they triggered (`user quoted`, `user replied`) plus their
     /// contributions to multi-actor reaction / zap / repost groups linger in
     /// `groups` and `eventCache` until the next cold-launch.
     func purgeAuthor(_ pubkey: String) {
