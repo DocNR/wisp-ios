@@ -177,24 +177,57 @@ struct ProfileView: View {
 
     @ViewBuilder
     private var tabBody: some View {
-        switch selectedTab {
-        case .notes:
-            NotesTabView(viewModel: viewModel)
-        case .replies:
-            RepliesTabView(viewModel: viewModel)
-        case .gallery:
-            GalleryTabView(viewModel: viewModel)
-        case .media:
-            MediaTabView(viewModel: viewModel)
-        case .following:
-            FollowingTabView(viewModel: viewModel)
-        case .followers:
-            FollowersTabView(viewModel: viewModel)
-        case .groups:
-            GroupsTabView(viewModel: viewModel)
-        case .relays:
-            RelaysTabView(viewModel: viewModel)
+        if !isMe && muteRepo.isBlocked(pubkey) {
+            blockedBanner
+        } else {
+            switch selectedTab {
+            case .notes:
+                NotesTabView(viewModel: viewModel)
+            case .replies:
+                RepliesTabView(viewModel: viewModel)
+            case .gallery:
+                GalleryTabView(viewModel: viewModel)
+            case .media:
+                MediaTabView(viewModel: viewModel)
+            case .following:
+                FollowingTabView(viewModel: viewModel)
+            case .followers:
+                FollowersTabView(viewModel: viewModel)
+            case .groups:
+                GroupsTabView(viewModel: viewModel)
+            case .relays:
+                RelaysTabView(viewModel: viewModel)
+            }
         }
+    }
+
+    private var blockedBanner: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "nosign")
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+            Text("You've blocked this user")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            Text("Their posts are hidden. Unblock to see their content.")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+            Button {
+                muteRepo.unblockUser(pubkey)
+            } label: {
+                Text("Unblock")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+                    .background(Color.wispSurfaceVariant, in: Capsule())
+                    .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+        .padding(.horizontal, 24)
     }
 
     private func shortKey(_ pk: String) -> String {
