@@ -591,13 +591,19 @@ struct ComposeView: View {
                     viewModel.publish()
                 } label: {
                     Group {
-                        if viewModel.isMining {
+                        // Only flag mining once the miner has reported real
+                        // attempts. Low-difficulty PoW returns nearly
+                        // instantly, leaving `miningAttempts` at 0 — the
+                        // label would otherwise flash "Mining 0" before
+                        // settling on "Publishing", which reads as a stray
+                        // countdown number.
+                        if viewModel.isMining && viewModel.miningAttempts > 0 {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.small).tint(.white)
                                 Text("Mining \(viewModel.miningAttempts)")
                                     .font(.subheadline.weight(.semibold))
                             }
-                        } else if viewModel.isPublishing {
+                        } else if viewModel.isPublishing || viewModel.isMining {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.small).tint(.white)
                                 Text(viewModel.scheduleEnabled ? "Scheduling" : "Publishing")
