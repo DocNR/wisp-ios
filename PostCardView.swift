@@ -340,13 +340,14 @@ struct PostCardView: View {
 
     private var repostBanner: some View {
         HStack(spacing: 6) {
+            CachedAvatarView(url: profile?.picture, size: 16)
             Image(systemName: "arrow.2.squarepath")
                 .font(.system(size: 12))
             Text("\(profile?.displayString ?? "Someone") reposted")
                 .font(.caption)
         }
-        .foregroundStyle(Color.wispRepostColor)
-        .padding(.leading, 68)
+        .foregroundStyle(.secondary)
+        .padding(.leading, 16)
         .padding(.top, 8)
     }
 
