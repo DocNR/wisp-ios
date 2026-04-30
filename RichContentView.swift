@@ -17,12 +17,39 @@ struct RichContentView: View {
 
     @Environment(AppSettings.self) private var settings
 
-    var body: some View {
+    /// Process-wide segment cache. `ContentParser.parse` runs an expensive
+    /// combined regex over the note's content + reads every imeta tag — at
+    /// 50–100 visible cards a scroll frame, recomputing on each body call
+    /// stalls the main thread. The parse result depends only on `content` +
+    /// `tags`, both immutable for a given event, so caching is safe. Note
+    /// content is content-addressed at the event layer, so keying on it
+    /// directly is sufficient — two events with identical content + tags
+    /// would collide, but they're already the same event id from a nostr
+    /// standpoint. NSCache evicts under memory pressure.
+    private final class SegmentBox {
+        let segments: [ContentSegment]
+        init(_ segments: [ContentSegment]) { self.segments = segments }
+    }
+    private static let parseCache: NSCache<NSString, SegmentBox> = {
+        let cache = NSCache<NSString, SegmentBox>()
+        cache.countLimit = 512
+        return cache
+    }()
+
+    private func memoizedParse() -> [ContentSegment] {
+        let key = content as NSString
+        if let box = Self.parseCache.object(forKey: key) { return box.segments }
         let segments = ContentParser.parse(
             content: content,
             tags: tags,
             emojiMap: ContentParser.parseEmojiTags(tags)
         )
+        Self.parseCache.setObject(SegmentBox(segments), forKey: key)
+        return segments
+    }
+
+    var body: some View {
+        let segments = memoizedParse()
         let groups = groupSegments(segments, gridLayout: settings.mediaLayoutStyle == .grid)
 
         VStack(alignment: .leading, spacing: 8) {
