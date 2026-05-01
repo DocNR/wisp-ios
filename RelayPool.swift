@@ -41,19 +41,17 @@ enum RelayPool {
     static var pendingAuth: AsyncStream<PendingAuthRequest> { _pendingAuth.stream }
 
     private static func emitPendingAuth(url: String, challenge: String) {
-        if authApprovalCheck?(url) == true { return }
-        _pendingAuth.continuation.yield(PendingAuthRequest(relayUrl: url, challenge: challenge))
+        // No-op: AUTH is handled silently via authSigner whenever a keypair is available.
     }
 
-    /// Handle an incoming `["AUTH", challenge]` frame. If the relay is pre-approved,
-    /// sign and send back an AUTH response immediately. Returns `true` only when an
-    /// AUTH event was actually signed and sent — callers use this to know whether to
-    /// replay their original REQ/EVENT (some relays drop the pre-AUTH frame).
+    /// Handle an incoming `["AUTH", challenge]` frame. Signs and sends back an AUTH
+    /// response immediately whenever a keypair is available. Returns `true` only when
+    /// an AUTH event was actually signed and sent — callers use this to know whether
+    /// to replay their original REQ/EVENT (some relays drop the pre-AUTH frame).
     @discardableResult
     fileprivate static func respondToAuthChallenge(challenge: String, urlString: String,
                                                    ws: URLSessionWebSocketTask) async -> Bool {
-        guard authApprovalCheck?(urlString) == true,
-              let event = authSigner?(urlString, challenge) else { return false }
+        guard let event = authSigner?(urlString, challenge) else { return false }
         let payload = "[\"AUTH\",\(event.toJSON())]"
         do {
             try await ws.send(.string(payload))
