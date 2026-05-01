@@ -38,7 +38,7 @@ struct RelaySettingsView: View {
                     Toggle("Sign in to relays automatically", isOn: $settings.autoApproveRelayAuth)
                         .tint(theme.primary)
                         .font(.system(size: 14))
-                        .listRowBackground(theme.palette.surface)
+                        .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
                 }
@@ -69,9 +69,9 @@ struct RelaySettingsView: View {
                 } else {
                     ForEach(urls, id: \.self) { url in
                         relayRow(url: url)
-                            .listRowBackground(theme.palette.surface)
+                            .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     deleteCurrent(url: url)
@@ -200,6 +200,9 @@ struct RelaySettingsView: View {
                 chip(label: "write", on: relay.write) { repo.toggleGeneralWrite(url, keypair: keypair) }
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(theme.palette.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
     @ViewBuilder

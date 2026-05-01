@@ -123,38 +123,50 @@ struct SidebarDrawerView: View {
         ZStack(alignment: .top) {
             Color.wispBackground.ignoresSafeArea()
 
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
-                    headerSection
-                        .padding(.top, 16)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        headerSection
+                            .padding(.top, 16)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 12)
 
-                    if accountsExpanded {
-                        accountPickerSection
-                            .transition(.opacity)
+                        if accountsExpanded {
+                            accountPickerSection
+                                .transition(.opacity)
+                        }
+
+                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+                            .padding(.bottom, 8)
+
+                        primaryItems
+
+                        if settingsExpanded {
+                            settingsItems
+                                .transition(.opacity)
+                        }
+
+                        Spacer(minLength: 16)
+
+                        Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+                            .padding(.vertical, 8)
+
+                        logoutButton
+
+                        versionFooter
+                            .padding(.top, 16)
+                            .padding(.bottom, 24)
                     }
-
-                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-                        .padding(.bottom, 8)
-
-                    primaryItems
-
-                    if settingsExpanded {
-                        settingsItems
-                            .transition(.opacity)
+                }
+                .onChange(of: settingsExpanded) { _, expanded in
+                    if expanded {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(300))
+                            withAnimation {
+                                proxy.scrollTo("settingsBottom", anchor: .bottom)
+                            }
+                        }
                     }
-
-                    Spacer(minLength: 16)
-
-                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
-                        .padding(.vertical, 8)
-
-                    logoutButton
-
-                    versionFooter
-                        .padding(.top, 16)
-                        .padding(.bottom, 24)
                 }
             }
         }
@@ -432,6 +444,7 @@ struct SidebarDrawerView: View {
             }
             // DrawerRow(icon: "heart", label: "Relay Health", indented: true) { onClose() }
             // DrawerRow(icon: "ladybug", label: "Console", indented: true) { onClose() }
+            Color.clear.frame(height: 1).id("settingsBottom")
         }
     }
 
