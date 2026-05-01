@@ -42,14 +42,18 @@ nonisolated enum Nip47 {
     }
 
     /// Inspect a wallet service's kind 13194 info event for its supported encryption.
-    /// Returns NIP-44 if the wallet advertises `nip44_v2`, else NIP-04.
+    /// Returns NIP-04 only if the wallet explicitly advertises a list that excludes NIP-44.
+    /// Defaults to NIP-44 (the modern standard) when the info event has no encryption tag.
     static func parseInfoEncryption(_ event: NostrEvent) -> Encryption {
         let tag = event.tags.first { $0.count >= 2 && $0[0] == "encryption" }
         if let tag {
             let schemes = tag[1].split(separator: " ").map { $0.lowercased() }
-            if schemes.contains("nip44_v2") { return .nip44 }
+            // Wallet explicitly lists its supported schemes — honor that list.
+            return schemes.contains("nip44_v2") ? .nip44 : .nip04
         }
-        return .nip04
+        // No encryption tag: assume NIP-44. Most modern wallets support it and the
+        // response side already auto-detects encryption, so this is safe to upgrade.
+        return .nip44
     }
 
     // MARK: - Build request event

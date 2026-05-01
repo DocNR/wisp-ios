@@ -87,7 +87,7 @@ struct WalletView: View {
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
         return VStack(spacing: 4) {
-            Text(CurrencyFormatter.full(sats: sats))
+            Text(CurrencyFormatter.formatNumber(sats))
                 .font(.system(size: 44, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
                 .contentTransition(.numericText(value: Double(sats)))
@@ -185,7 +185,7 @@ struct WalletView: View {
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text("\(isIncoming ? "+" : "-")\(CurrencyFormatter.full(sats: sats))")
+                    Text("\(isIncoming ? "+" : "-")\(CurrencyFormatter.formatNumber(sats))")
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundStyle(amountColor)
                     Text("sats")
@@ -193,7 +193,7 @@ struct WalletView: View {
                         .foregroundStyle(.secondary)
                 }
                 if !isIncoming, feeSats > 0 {
-                    Text("Fee: \(CurrencyFormatter.full(sats: feeSats)) sats")
+                    Text("Fee: \(CurrencyFormatter.formatNumber(feeSats)) sats")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

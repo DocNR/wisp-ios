@@ -37,12 +37,17 @@ enum CurrencyFormatter {
     }
 
     static func formatSatsFull(_ n: Int64) -> String {
+        return "\(formatNumber(n)) sats"
+    }
+
+    /// Just the grouped number, no unit suffix. Used when "sats" is rendered
+    /// as a separate UI label so callers don't duplicate it.
+    static func formatNumber(_ n: Int64) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.groupingSeparator = ","
         formatter.usesGroupingSeparator = true
-        let str = formatter.string(from: NSNumber(value: n)) ?? "\(n)"
-        return "\(str) sats"
+        return formatter.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
     // MARK: - Fiat helpers

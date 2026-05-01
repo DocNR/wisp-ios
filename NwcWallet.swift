@@ -73,7 +73,8 @@ final class NwcWallet: Wallet {
             ),
             timeout: 5
         )
-        let encryption = infoEvents.first.map(Nip47.parseInfoEncryption) ?? .nip04
+        // Default to NIP-44 when no info event is found — modern wallets expect it.
+        let encryption = infoEvents.first.map(Nip47.parseInfoEncryption) ?? .nip44
         conn = conn.with(encryption: encryption)
         emit("Encryption: \(encryption == .nip44 ? "NIP-44" : "NIP-04")")
         connection = conn
