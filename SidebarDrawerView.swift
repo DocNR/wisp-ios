@@ -430,8 +430,8 @@ struct SidebarDrawerView: View {
             DrawerRow(icon: "face.smiling", label: "Custom Emojis", indented: true) {
                 onOpenCustomEmojis()
             }
-            DrawerRow(icon: "heart", label: "Relay Health", indented: true) { onClose() }
-            DrawerRow(icon: "ladybug", label: "Console", indented: true) { onClose() }
+            // DrawerRow(icon: "heart", label: "Relay Health", indented: true) { onClose() }
+            // DrawerRow(icon: "ladybug", label: "Console", indented: true) { onClose() }
         }
     }
 
