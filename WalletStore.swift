@@ -52,6 +52,8 @@ final class WalletStore {
     init(keypair: Keypair) {
         self.keypair = keypair
         self.mode = WalletMode.load(for: keypair.pubkey)
+        self.balanceMsats = WalletCache.loadBalance(for: keypair.pubkey)
+        self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
     }
 
     // MARK: - Wallet selection
@@ -63,14 +65,21 @@ final class WalletStore {
         disconnect()
         self.keypair = keypair
         self.mode = WalletMode.load(for: keypair.pubkey)
-        self.balanceMsats = nil
-        self.transactions = []
+        self.balanceMsats = WalletCache.loadBalance(for: keypair.pubkey)
+        self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
     }
 
     /// Try to bring up whatever wallet the user previously configured. Safe to call repeatedly.
+    /// On a re-call after wallet is already wired up, just refresh balance + transactions
+    /// in the background so the user sees fresh data on tab open.
     func startIfConfigured() async {
-        guard wallet == nil, let mode else { return }
-        try? await switchToMode(mode)
+        guard let mode else { return }
+        if wallet == nil {
+            try? await switchToMode(mode)
+        } else if isConnected {
+            _ = await fetchBalance()
+            await refreshTransactions()
+        }
     }
 
     @discardableResult
@@ -90,6 +99,13 @@ final class WalletStore {
         WalletMode.save(newMode, for: keypair.pubkey)
         await newWallet.connect()
         isConnected = newWallet.isConnected
+        // Fire-and-forget the balance/transactions refresh — the dashboard already
+        // renders the cached values from `WalletCache` instantly, and live updates
+        // arrive via the wallet's balanceUpdates stream when the SDK syncs.
+        if newWallet.isConnected {
+            Task { _ = await self.fetchBalance() }
+            Task { await self.refreshTransactions() }
+        }
         return newWallet.isConnected
     }
 
@@ -104,7 +120,10 @@ final class WalletStore {
         WalletMode.save(.nwc, for: keypair.pubkey)
         await nwc.connect()
         isConnected = nwc.isConnected
-        if isConnected { _ = await fetchBalance() }
+        if isConnected {
+            Task { _ = await self.fetchBalance() }
+            Task { await self.refreshTransactions() }
+        }
         return isConnected
     }
 
@@ -119,7 +138,10 @@ final class WalletStore {
         WalletMode.save(.spark, for: keypair.pubkey)
         await spark.connect()
         isConnected = spark.isConnected
-        if isConnected { _ = await fetchBalance() }
+        if isConnected {
+            Task { _ = await self.fetchBalance() }
+            Task { await self.refreshTransactions() }
+        }
         return isConnected
     }
 
@@ -146,7 +168,9 @@ final class WalletStore {
         }
         balanceTask = Task { [weak self] in
             for await msats in wallet.balanceUpdates {
-                self?.balanceMsats = msats
+                guard let self else { return }
+                self.balanceMsats = msats
+                WalletCache.saveBalance(msats, for: self.keypair.pubkey)
             }
         }
     }
@@ -158,6 +182,7 @@ final class WalletStore {
         guard let wallet else { return nil }
         if case .success(let msats) = await wallet.fetchBalance() {
             balanceMsats = msats
+            WalletCache.saveBalance(msats, for: keypair.pubkey)
             return msats
         }
         return nil
@@ -177,6 +202,7 @@ final class WalletStore {
         guard let wallet else { return }
         if case .success(let txs) = await wallet.listTransactions(limit: 50, offset: 0) {
             transactions = txs
+            WalletCache.saveTransactions(txs, for: keypair.pubkey)
         }
     }
 

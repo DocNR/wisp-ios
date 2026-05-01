@@ -209,7 +209,11 @@ struct MainView: View {
             async let peopleLists: Void = PeopleListRepository.shared.bootstrap(keypair: keypair)
             async let noteLists: Void = NoteListRepository.shared.bootstrap(keypair: keypair)
             async let relaySettings: Void = RelaySettingsRepository.shared.bootstrap(keypair: keypair)
-            _ = await (feed, messages, notifications, groups, emoji, hashtagSets, peopleLists, noteLists, relaySettings)
+            // Pre-warm the wallet at app start so the wallet tab opens with live data
+            // instead of waiting for the user to land on it before kicking off the
+            // 3-8s Spark SDK init or NWC relay handshake.
+            async let wallet: Void = walletStore.startIfConfigured()
+            _ = await (feed, messages, notifications, groups, emoji, hashtagSets, peopleLists, noteLists, relaySettings, wallet)
         }
         .onDisappear {
             viewModel.stop()

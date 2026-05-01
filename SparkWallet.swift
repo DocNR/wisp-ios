@@ -107,7 +107,11 @@ final class SparkWallet: Wallet {
 
             isConnected = true
             emit("Connected to Spark")
-            await refreshBalance()
+            // Fire-and-forget — don't block connect() on a slow first sync. The SDK's
+            // own `.synced` event will trigger another refreshBalance once the wallet
+            // has caught up. Until then, the dashboard renders the cached balance from
+            // UserDefaults so the user isn't staring at a spinner.
+            Task { await self.refreshBalance() }
         } catch {
             emit("Connection failed: \(error.localizedDescription)")
             isConnected = false
@@ -153,9 +157,9 @@ final class SparkWallet: Wallet {
     private func refreshBalance() async {
         guard let sdk else { return }
         do {
-            // ensureSynced=true on the first call after connect so we don't show stale 0 balance.
-            // Subsequent calls hit the cache (the SDK's .synced event triggers a fresh refresh).
-            let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: balanceMsats == nil))
+            // Always read the SDK's cached balance — never block on a network sync.
+            // Fresh data arrives via `.synced` events which trigger another call here.
+            let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: false))
             let msats = Int64(info.balanceSats) * 1000
             balanceMsats = msats
             balanceContinuation.yield(msats)
@@ -169,7 +173,7 @@ final class SparkWallet: Wallet {
     func fetchBalance() async -> Result<Int64, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {
-            let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: balanceMsats == nil))
+            let info = try await sdk.getInfo(request: GetInfoRequest(ensureSynced: false))
             let msats = Int64(info.balanceSats) * 1000
             balanceMsats = msats
             balanceContinuation.yield(msats)

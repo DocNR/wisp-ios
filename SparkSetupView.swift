@@ -14,18 +14,15 @@ struct SparkSetupView: View {
     enum PickerMode { case pick, create, restoreSeed, restoreRelays }
 
     var body: some View {
-        Form {
-            switch mode {
-            case .pick:
-                pickSection
-            case .create:
-                createSection
-            case .restoreSeed:
-                restoreFromSeedSection
-            case .restoreRelays:
-                restoreFromRelaysSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                content
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
+        .background(Color.wispBackground.ignoresSafeArea())
         .navigationTitle("Spark Wallet")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Close", action: dismiss) }
@@ -39,22 +36,38 @@ struct SparkSetupView: View {
         }
     }
 
-    private var pickSection: some View {
-        Section {
-            Button { startCreate() } label: {
-                row(icon: "plus.circle.fill", title: "Create new wallet", subtitle: "Generate a fresh 12-word seed")
-            }
-            Button { mode = .restoreSeed } label: {
-                row(icon: "arrow.uturn.backward.circle.fill", title: "Restore from seed phrase", subtitle: "12 / 15 / 18 / 21 / 24 words")
-            }
-            Button { mode = .restoreRelays; Task { await store.searchRelayBackup() } } label: {
-                row(icon: "icloud.and.arrow.down.fill", title: "Restore from relays", subtitle: "Encrypted backup published from another device")
-            }
+    @ViewBuilder
+    private var content: some View {
+        switch mode {
+        case .pick:           pickSection
+        case .create:         createSection
+        case .restoreSeed:    restoreFromSeedSection
+        case .restoreRelays:  restoreFromRelaysSection
         }
     }
 
+    private var pickSection: some View {
+        VStack(spacing: 0) {
+            Button { startCreate() } label: {
+                row(icon: "plus.circle.fill", title: "Create new wallet", subtitle: "Generate a fresh 12-word seed")
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 56)
+            Button { mode = .restoreSeed } label: {
+                row(icon: "arrow.uturn.backward.circle.fill", title: "Restore from seed phrase", subtitle: "12 / 15 / 18 / 21 / 24 words")
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 56)
+            Button { mode = .restoreRelays; Task { await store.searchRelayBackup() } } label: {
+                row(icon: "icloud.and.arrow.down.fill", title: "Restore from relays", subtitle: "Encrypted backup published from another device")
+            }
+            .buttonStyle(.plain)
+        }
+        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+    }
+
     private func row(icon: String, title: String, subtitle: String) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Image(systemName: icon)
                 .font(.system(size: 22))
                 .foregroundStyle(Color.wispZapColor)
@@ -65,7 +78,9 @@ struct SparkSetupView: View {
             }
             Spacer()
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
     }
 
     // MARK: - Create
@@ -80,27 +95,33 @@ struct SparkSetupView: View {
     }
 
     private var createSection: some View {
-        Group {
-            Section("Your recovery phrase") {
-                Text("Write these 12 words down somewhere safe. Anyone with this phrase controls your funds.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let mnemonic = newMnemonic {
-                    Text(mnemonic)
-                        .font(.system(.subheadline, design: .monospaced))
-                        .padding(8)
-                        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-                        .textSelection(.enabled)
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Your recovery phrase").font(.subheadline.weight(.semibold))
+            Text("Write these 12 words down somewhere safe. Anyone with this phrase controls your funds.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let mnemonic = newMnemonic {
+                Text(mnemonic)
+                    .font(.system(.subheadline, design: .monospaced))
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                    .textSelection(.enabled)
             }
-            Section {
-                Button {
-                    guard let mnemonic = newMnemonic else { return }
-                    Task { await connect(with: mnemonic) }
-                } label: {
+            Button {
+                guard let mnemonic = newMnemonic else { return }
+                Task { await connect(with: mnemonic) }
+            } label: {
+                Group {
                     if inFlight { ProgressView() } else { Text("I've backed this up — continue") }
                 }
-                .disabled(inFlight || newMnemonic == nil)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .foregroundStyle(.white)
+                .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 10))
             }
+            .disabled(inFlight || newMnemonic == nil)
+            .buttonStyle(.plain)
             if let restoreError {
                 Text(restoreError).font(.caption).foregroundStyle(.red)
             }
@@ -110,67 +131,78 @@ struct SparkSetupView: View {
     // MARK: - Restore from seed
 
     private var restoreFromSeedSection: some View {
-        Group {
-            Section("Recovery phrase") {
-                TextEditor(text: $restoreEntry)
-                    .frame(minHeight: 110)
-                    .font(.system(.subheadline, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Recovery phrase").font(.subheadline.weight(.semibold))
+            TextEditor(text: $restoreEntry)
+                .frame(minHeight: 110)
+                .font(.system(.subheadline, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .padding(8)
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
             if let restoreError {
                 Text(restoreError).font(.caption).foregroundStyle(.red)
             }
-            Section {
-                Button {
-                    let trimmed = restoreEntry.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let err = Bip39.validate(trimmed) {
-                        restoreError = err
-                        return
-                    }
-                    restoreError = nil
-                    Task { await connect(with: trimmed) }
-                } label: {
+            Button {
+                let trimmed = restoreEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let err = Bip39.validate(trimmed) {
+                    restoreError = err
+                    return
+                }
+                restoreError = nil
+                Task { await connect(with: trimmed) }
+            } label: {
+                Group {
                     if inFlight { ProgressView() } else { Text("Restore wallet") }
                 }
-                .disabled(restoreEntry.isEmpty || inFlight)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .foregroundStyle(.white)
+                .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 10))
             }
+            .disabled(restoreEntry.isEmpty || inFlight)
+            .buttonStyle(.plain)
         }
     }
 
     // MARK: - Restore from relays
 
     private var restoreFromRelaysSection: some View {
-        Group {
-            Section("Encrypted relay backup") {
-                switch store.relayBackupSearchState {
-                case .idle:
-                    Button("Search relays") { Task { await store.searchRelayBackup() } }
-                case .searching:
-                    HStack { ProgressView(); Text("Searching relays…") }
-                case .notFound:
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("No backup found on your relays.").font(.subheadline)
-                        Button("Search again") { Task { await store.searchRelayBackup() } }
-                    }
-                case .found(let entry):
-                    foundCard(entry: entry)
-                case .multiple(let entries):
-                    ForEach(entries) { entry in
-                        Button { store.selectBackupToRestore(entry) } label: {
-                            foundCard(entry: entry)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                case .error(let message):
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Search failed: \(message)").font(.subheadline).foregroundStyle(.red)
-                        Button("Retry") { Task { await store.searchRelayBackup() } }
-                    }
-                }
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Encrypted relay backup").font(.subheadline.weight(.semibold))
+            relayBackupBody
             if let restoreError {
                 Text(restoreError).font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var relayBackupBody: some View {
+        switch store.relayBackupSearchState {
+        case .idle:
+            Button("Search relays") { Task { await store.searchRelayBackup() } }
+        case .searching:
+            HStack { ProgressView(); Text("Searching relays…") }
+        case .notFound:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("No backup found on your relays.").font(.subheadline)
+                Button("Search again") { Task { await store.searchRelayBackup() } }
+            }
+        case .found(let entry):
+            foundCard(entry: entry)
+        case .multiple(let entries):
+            ForEach(entries) { entry in
+                Button { store.selectBackupToRestore(entry) } label: {
+                    foundCard(entry: entry)
+                }
+                .buttonStyle(.plain)
+            }
+        case .error(let message):
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Search failed: \(message)").font(.subheadline).foregroundStyle(.red)
+                Button("Retry") { Task { await store.searchRelayBackup() } }
             }
         }
     }
@@ -194,6 +226,8 @@ struct SparkSetupView: View {
             .buttonStyle(.borderedProminent)
             .disabled(inFlight)
         }
+        .padding(14)
+        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Connect

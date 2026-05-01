@@ -2,18 +2,22 @@ import SwiftUI
 
 struct WalletView: View {
     @Bindable var store: WalletStore
-    @State private var showSetup = false
     @State private var setupMode: WalletMode? = nil
     @State private var showSend = false
     @State private var showReceive = false
 
+    /// Show the dashboard immediately whenever there's a balance to render — even before
+    /// the wallet has finished reconnecting on cold launch. The cached number comes from
+    /// `WalletCache` and gets overwritten by the live response within a second or two.
+    private var hasCachedDataOrConnected: Bool {
+        store.balanceMsats != nil || !store.transactions.isEmpty
+    }
+
     var body: some View {
         Group {
-            if store.activeWallet == nil || store.mode == nil {
-                WalletModeSelectionView(
-                    onPick: { mode in setupMode = mode; showSetup = true }
-                )
-            } else if !store.isConnected {
+            if store.mode == nil {
+                WalletModeSelectionView(onPick: { setupMode = $0 })
+            } else if !hasCachedDataOrConnected && !store.isConnected {
                 connectingView
             } else {
                 walletDashboard
@@ -21,15 +25,12 @@ struct WalletView: View {
         }
         .background(Color.wispBackground)
         .task { await store.startIfConfigured() }
-        .sheet(isPresented: $showSetup) {
-            if let setupMode {
-                NavigationStack {
-                    Group {
-                        switch setupMode {
-                        case .nwc: NwcSetupView(store: store, dismiss: { showSetup = false })
-                        case .spark: SparkSetupView(store: store, dismiss: { showSetup = false })
-                        }
-                    }
+        .sheet(item: $setupMode) { mode in
+            NavigationStack {
+                if mode == .nwc {
+                    NwcSetupView(store: store, dismiss: { setupMode = nil })
+                } else {
+                    SparkSetupView(store: store, dismiss: { setupMode = nil })
                 }
             }
         }
@@ -61,15 +62,20 @@ struct WalletView: View {
 
     private var walletDashboard: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: 28) {
                 balanceCard
                 actionRow
+                if !store.isConnected {
+                    reconnectingBanner
+                }
                 if !store.transactions.isEmpty {
                     transactionsList
                 }
                 modeFooter
             }
-            .padding(16)
+            .padding(.horizontal, 16)
+            .padding(.top, 24)
+            .padding(.bottom, 16)
         }
         .refreshable {
             _ = await store.fetchBalance()
@@ -79,46 +85,68 @@ struct WalletView: View {
     }
 
     private var balanceCard: some View {
-        VStack(spacing: 6) {
-            Text("Balance").font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                Image(systemName: "bolt.fill").foregroundStyle(Color.wispZapColor)
-                Text(CurrencyFormatter.full(sats: store.balanceMsats.map { $0 / 1000 } ?? 0))
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
-            }
+        let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
+        return VStack(spacing: 4) {
+            Text(CurrencyFormatter.full(sats: sats))
+                .font(.system(size: 44, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+                .contentTransition(.numericText(value: Double(sats)))
+                .animation(.easeInOut(duration: 0.25), value: sats)
+            Text("sats")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
-        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 16))
+        .padding(.vertical, 12)
+    }
+
+    private var reconnectingBanner: some View {
+        HStack(spacing: 8) {
+            ProgressView().scaleEffect(0.7)
+            Text(store.lastStatus ?? "Reconnecting…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.wispSurfaceVariant.opacity(0.4), in: Capsule())
     }
 
     private var actionRow: some View {
-        HStack(spacing: 12) {
-            Button {
-                showSend = true
-            } label: {
-                Label("Send", systemImage: "arrow.up.right")
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            Button {
-                showReceive = true
-            } label: {
-                Label("Receive", systemImage: "arrow.down.left")
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-            }
-            .buttonStyle(.bordered)
+        HStack(spacing: 32) {
+            circularAction(label: "Send", systemImage: "arrow.up", action: { showSend = true })
+            circularAction(label: "Receive", systemImage: "arrow.down", action: { showReceive = true })
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func circularAction(label: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 64)
+                    .background(Color.wispZapColor, in: Circle())
+                Text(label)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.primary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var transactionsList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recent")
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Transactions")
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 4)
+                .padding(.bottom, 8)
             ForEach(store.transactions.prefix(20)) { tx in
                 transactionRow(tx)
-                Divider().opacity(0.3)
+                if tx.id != store.transactions.prefix(20).last?.id {
+                    Divider().opacity(0.25).padding(.leading, 52)
+                }
             }
         }
     }
@@ -128,29 +156,50 @@ struct WalletView: View {
         // For outgoing zaps we recorded the recipient's pubkey at send time; look up their profile.
         let recipientPubkey = tx.counterpartyPubkey ?? ZapSender.recipient(forPaymentHash: tx.paymentHash)
         let profile = recipientPubkey.flatMap { ProfileRepository.shared.get($0) }
+        let isIncoming = tx.type == .incoming
+        let amountColor: Color = isIncoming ? Color.wispRepostColor : .red.opacity(0.85)
+        let sats = abs(tx.amountMsats) / 1000
+        let feeSats = tx.feeMsats / 1000
 
-        HStack(spacing: 12) {
-            if let profile {
-                CachedAvatarView(url: profile.picture, size: 32)
-            } else {
-                Image(systemName: tx.type == .incoming ? "arrow.down.left.circle.fill" : "arrow.up.right.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(tx.type == .incoming ? Color.wispRepostColor : .secondary)
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                if let profile {
+                    CachedAvatarView(url: profile.picture, size: 40)
+                } else {
+                    Circle()
+                        .fill((isIncoming ? Color.wispRepostColor : Color.red).opacity(0.18))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: isIncoming ? "arrow.down" : "arrow.up")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(amountColor)
+                }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(profile?.displayString ?? tx.description ?? (tx.type == .incoming ? "Received" : "Sent"))
+                Text(profile?.displayString ?? (tx.description?.isEmpty == false ? tx.description! : (isIncoming ? "Received" : "Sent")))
                     .font(.subheadline.weight(profile != nil ? .semibold : .regular))
                     .lineLimit(1)
-                Text(relativeTime(from: Int(tx.createdAt)))
+                Text(relativeTime(from: Int(tx.settledAt ?? tx.createdAt)))
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
-            Spacer()
-            Text("\(tx.type == .incoming ? "+" : "-")\(CurrencyFormatter.full(sats: tx.amountMsats / 1000))")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(tx.type == .incoming ? Color.wispRepostColor : .primary)
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text("\(isIncoming ? "+" : "-")\(CurrencyFormatter.full(sats: sats))")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(amountColor)
+                    Text("sats")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if !isIncoming, feeSats > 0 {
+                    Text("Fee: \(CurrencyFormatter.full(sats: feeSats)) sats")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .padding(.horizontal, 4)
     }
 
@@ -163,7 +212,6 @@ struct WalletView: View {
             Spacer()
             Button("Switch") {
                 setupMode = store.mode == .nwc ? .spark : .nwc
-                showSetup = true
             }
             .font(.caption)
         }
