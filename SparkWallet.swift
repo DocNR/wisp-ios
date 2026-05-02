@@ -168,6 +168,13 @@ final class SparkWallet: Wallet {
         }
     }
 
+    // MARK: - Lightning address
+
+    func fetchLightningAddress() async -> String? {
+        guard let sdk else { return nil }
+        return try? await sdk.getLightningAddress()?.lightningAddress
+    }
+
     // MARK: - Wallet ops
 
     func fetchBalance() async -> Result<Int64, WalletError> {

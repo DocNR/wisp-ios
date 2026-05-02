@@ -17,6 +17,7 @@ final class WalletStore {
     /// Backup search/publish progress for the Spark relay-backup flow.
     private(set) var relayBackupSearchState: BackupSearchState = .idle
     private(set) var relayBackupPublishState: BackupPublishState = .idle
+    private(set) var lightningAddress: String?
 
     private var wallet: Wallet?
     private var statusTask: Task<Void, Never>?
@@ -93,6 +94,7 @@ final class WalletStore {
         mode = nil
         balanceMsats = nil
         transactions = []
+        lightningAddress = nil
         relayBackupSearchState = .idle
         relayBackupPublishState = .idle
     }
@@ -117,9 +119,19 @@ final class WalletStore {
         guard let mode else { return }
         if wallet == nil {
             try? await switchToMode(mode)
+            await refreshLightningAddress()
         } else if isConnected {
             _ = await fetchBalance()
             await refreshTransactions()
+            await refreshLightningAddress()
+        }
+    }
+
+    func refreshLightningAddress() async {
+        if let spark = wallet as? SparkWallet {
+            lightningAddress = await spark.fetchLightningAddress()
+        } else if let nwc = wallet as? NwcWallet {
+            lightningAddress = nwc.lud16
         }
     }
 
@@ -146,6 +158,7 @@ final class WalletStore {
         if newWallet.isConnected {
             Task { _ = await self.fetchBalance() }
             Task { await self.refreshTransactions() }
+            Task { await self.refreshLightningAddress() }
         }
         return newWallet.isConnected
     }

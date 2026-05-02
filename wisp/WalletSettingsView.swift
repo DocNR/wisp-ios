@@ -14,18 +14,21 @@ struct WalletSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            displaySection
-            if store.mode == .spark {
-                securitySection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                displaySection
+                if store.mode == .spark {
+                    securitySection
+                }
+                dangerSection
             }
-            dangerSection
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 40)
         }
         .background(Color.wispBackground.ignoresSafeArea())
-        .scrollContentBackground(.hidden)
         .navigationTitle("Wallet Settings")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
         .alert("Disconnect wallet?", isPresented: $showDisconnectAlert) {
             Button("Disconnect", role: .destructive) {
                 store.resetToNoWallet()
@@ -49,59 +52,94 @@ struct WalletSettingsView: View {
     // MARK: - Display
 
     private var displaySection: some View {
-        Section("Display") {
-            Toggle("Hide balance", isOn: $balanceHidden)
+        settingsGroup(header: "Display") {
+            HStack {
+                Text("Hide balance")
+                    .font(.subheadline)
+                Spacer()
+                Toggle("", isOn: $balanceHidden)
+                    .labelsHidden()
+                    .tint(Color.wispZapColor)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
         }
     }
 
     // MARK: - Security (Spark only)
 
     private var securitySection: some View {
-        Section("Security") {
+        settingsGroup(header: "Security") {
+            // Recovery phrase
             NavigationLink(value: WalletRoute.recoveryPhrase) {
-                Label {
+                HStack(spacing: 12) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.wispZapColor)
+                        .frame(width: 22)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Recovery phrase")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
                         if !store.seedBackupAcknowledged {
                             Text("Not acknowledged")
                                 .font(.caption)
                                 .foregroundStyle(Color.wispZapColor)
                         }
                     }
-                } icon: {
-                    Image(systemName: "key.fill")
-                        .foregroundStyle(Color.wispZapColor)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             }
+            .buttonStyle(.plain)
 
-            relayBackupRow
+            Divider().opacity(0.25).padding(.leading, 50)
+
+            // Relay backup
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "icloud.and.arrow.up")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22)
+                    Text("Relay backup")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+
+                relayBackupContent
+                    .padding(.leading, 34)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
         }
     }
 
     @ViewBuilder
-    private var relayBackupRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label {
-                Text("Relay backup")
-            } icon: {
-                Image(systemName: "icloud.and.arrow.up")
+    private var relayBackupContent: some View {
+        switch store.relayBackupPublishState {
+        case .idle:
+            Button("Back up seed to relays") {
+                Task { await store.publishRelayBackup() }
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(Color.wispZapColor)
+
+        case .publishing:
+            HStack(spacing: 8) {
+                ProgressView().scaleEffect(0.75)
+                Text("Publishing…")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .font(.body)
 
-            switch store.relayBackupPublishState {
-            case .idle:
-                Button("Back up seed to relays") {
-                    Task { await store.publishRelayBackup() }
-                }
-                .font(.subheadline)
-                .foregroundStyle(Color.wispZapColor)
-            case .publishing:
-                HStack(spacing: 6) {
-                    ProgressView().scaleEffect(0.7)
-                    Text("Publishing…").font(.caption).foregroundStyle(.secondary)
-                }
-            case .success(let relays):
+        case .success(let relays):
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     Text("Backed up to \(relays.count) relay\(relays.count == 1 ? "" : "s")")
@@ -112,10 +150,12 @@ struct WalletSettingsView: View {
                     store.resetRelayBackupPublish()
                     Task { await store.publishRelayBackup() }
                 }
-                .font(.caption)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(Color.wispZapColor)
-                .padding(.top, 2)
-            case .error(let msg):
+            }
+
+        case .error(let msg):
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
                     Text(msg).font(.caption).foregroundStyle(.secondary)
@@ -124,39 +164,85 @@ struct WalletSettingsView: View {
                     store.resetRelayBackupPublish()
                     Task { await store.publishRelayBackup() }
                 }
-                .font(.caption)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(Color.wispZapColor)
-                .padding(.top, 2)
             }
         }
-        .padding(.vertical, 4)
     }
 
     // MARK: - Danger zone
 
     private var dangerSection: some View {
-        Section {
-            if store.mode == .nwc {
-                Button(role: .destructive) {
-                    showDisconnectAlert = true
-                } label: {
-                    Label("Disconnect wallet", systemImage: "xmark.circle")
-                }
-            } else {
-                Button(role: .destructive) {
-                    showDeleteAlert = true
-                } label: {
-                    Label("Delete wallet", systemImage: "trash")
-                }
-            }
-        } header: {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Danger Zone")
-        } footer: {
-            if store.mode == .spark {
-                Text("Deleting will remove the wallet from this device. You can restore it with your recovery phrase.")
-            } else {
-                Text("Disconnecting removes the NWC connection string. Your wallet provider is unaffected.")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                if store.mode == .nwc {
+                    Button {
+                        showDisconnectAlert = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "xmark.circle")
+                                .font(.system(size: 15))
+                                .foregroundStyle(.red)
+                                .frame(width: 22)
+                            Text("Disconnect wallet")
+                                .font(.subheadline)
+                                .foregroundStyle(.red)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        showDeleteAlert = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 15))
+                                .foregroundStyle(.red)
+                                .frame(width: 22)
+                            Text("Delete wallet")
+                                .font(.subheadline)
+                                .foregroundStyle(.red)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+            Text(store.mode == .spark
+                 ? "Deleting removes the wallet from this device. You can restore it with your recovery phrase."
+                 : "Disconnecting removes the NWC connection string. Your wallet provider is unaffected.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    // MARK: - Helper
+
+    private func settingsGroup<Content: View>(header: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(header)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
         }
     }
 }

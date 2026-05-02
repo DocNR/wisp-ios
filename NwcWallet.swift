@@ -40,6 +40,12 @@ final class NwcWallet: Wallet {
         WalletKeychain.loadNwcUri(for: pubkey) != nil
     }
 
+    /// Returns the `lud16` lightning address embedded in the NWC connection string, if present.
+    var lud16: String? {
+        guard let uri = WalletKeychain.loadNwcUri(for: pubkey) else { return nil }
+        return NwcConnection.parse(uri)?.lud16
+    }
+
     func saveConnection(_ uri: String) {
         WalletKeychain.saveNwcUri(uri, for: pubkey)
     }
