@@ -56,6 +56,47 @@ final class WalletStore {
         self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
     }
 
+    // MARK: - Seed backup (Spark mnemonic wallets only)
+
+    /// Whether the user has acknowledged viewing their recovery phrase.
+    var seedBackupAcknowledged: Bool {
+        (wallet as? SparkWallet)?.isSeedBackupAcknowledged() ?? true
+    }
+
+    func acknowledgeSeedBackup() {
+        (wallet as? SparkWallet)?.setSeedBackupAcknowledged(true)
+    }
+
+    /// Mnemonic for the active Spark wallet, nil for NWC or nsec-derived.
+    var sparkMnemonic: String? {
+        (wallet as? SparkWallet)?.loadMnemonic()
+    }
+
+    // MARK: - Disconnect / delete
+
+    /// Disconnect the wallet, clear all credentials, and reset mode to nil so the
+    /// mode-selection screen re-appears. Safe to call from any wallet type.
+    func resetToNoWallet() {
+        let currentMode = mode
+        let currentPubkey = keypair.pubkey
+        disconnect()
+        switch currentMode {
+        case .nwc:
+            WalletKeychain.deleteNwcUri(for: currentPubkey)
+        case .spark:
+            WalletKeychain.deleteSparkMnemonic(for: currentPubkey)
+            WalletCache.clear(for: currentPubkey)
+        case nil:
+            break
+        }
+        WalletMode.clear(for: currentPubkey)
+        mode = nil
+        balanceMsats = nil
+        transactions = []
+        relayBackupSearchState = .idle
+        relayBackupPublishState = .idle
+    }
+
     // MARK: - Wallet selection
 
     var activeWallet: Wallet? { wallet }

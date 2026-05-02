@@ -1,16 +1,32 @@
 import SwiftUI
 
+// MARK: - Navigation routes
+
+enum WalletRoute: Hashable {
+    case settings
+    case transactions
+    case recoveryPhrase
+}
+
+// MARK: - Main wallet view
+
 struct WalletView: View {
     @Bindable var store: WalletStore
     @State private var setupMode: WalletMode? = nil
     @State private var showSend = false
     @State private var showReceive = false
+    @AppStorage private var balanceHidden: Bool
 
     /// Show the dashboard immediately whenever there's a balance to render — even before
     /// the wallet has finished reconnecting on cold launch. The cached number comes from
     /// `WalletCache` and gets overwritten by the live response within a second or two.
     private var hasCachedDataOrConnected: Bool {
         store.balanceMsats != nil || !store.transactions.isEmpty
+    }
+
+    init(store: WalletStore) {
+        self.store = store
+        _balanceHidden = AppStorage(wrappedValue: false, "balanceHidden_\(store.keypair.pubkey)")
     }
 
     var body: some View {
@@ -24,6 +40,16 @@ struct WalletView: View {
             }
         }
         .background(Color.wispBackground)
+        .navigationDestination(for: WalletRoute.self) { route in
+            switch route {
+            case .settings:
+                WalletSettingsView(store: store)
+            case .transactions:
+                TransactionHistoryView(store: store)
+            case .recoveryPhrase:
+                RecoveryPhraseView(store: store)
+            }
+        }
         .task { await store.startIfConfigured() }
         .sheet(item: $setupMode) { mode in
             NavigationStack {
@@ -46,6 +72,8 @@ struct WalletView: View {
         }
     }
 
+    // MARK: - Connecting
+
     private var connectingView: some View {
         VStack(spacing: 16) {
             ProgressView()
@@ -60,22 +88,33 @@ struct WalletView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    // MARK: - Dashboard
+
     private var walletDashboard: some View {
         ScrollView {
-            VStack(spacing: 28) {
-                balanceCard
-                actionRow
-                if !store.isConnected {
-                    reconnectingBanner
+            VStack(spacing: 0) {
+                topBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
+
+                VStack(spacing: 24) {
+                    seedBackupBanner
+
+                    balanceCard
+                        .padding(.top, 8)
+
+                    actionRow
+
+                    if !store.isConnected {
+                        reconnectingBanner
+                    }
+
+                    recentTransactionsSection
                 }
-                if !store.transactions.isEmpty {
-                    transactionsList
-                }
-                modeFooter
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 24)
-            .padding(.bottom, 16)
         }
         .refreshable {
             _ = await store.fetchBalance()
@@ -84,21 +123,125 @@ struct WalletView: View {
         .task { await store.refreshTransactions() }
     }
 
+    // MARK: - Top bar
+
+    private var topBar: some View {
+        HStack(alignment: .center) {
+            walletLogo
+            Spacer()
+            NavigationLink(value: WalletRoute.settings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var walletLogo: some View {
+        if store.mode == .spark {
+            if UIImage(named: "SparkBreezLogo") != nil {
+                Image("SparkBreezLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 22)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.wispZapColor)
+                    Text("Spark / Breez")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+            }
+        } else {
+            if UIImage(named: "NwcLogo") != nil {
+                Image("NwcLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 22)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "bolt.shield.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.wispZapColor)
+                    Text("Nostr Wallet Connect")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Seed backup banner
+
+    @ViewBuilder
+    private var seedBackupBanner: some View {
+        if store.mode == .spark && !store.seedBackupAcknowledged {
+            NavigationLink(value: WalletRoute.recoveryPhrase) {
+                HStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.wispZapColor)
+                        .font(.system(size: 18))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Back up your recovery phrase")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Tap to view and acknowledge your seed phrase")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.wispZapColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Balance
+
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
-        return VStack(spacing: 4) {
-            Text(CurrencyFormatter.formatNumber(sats))
-                .font(.system(size: 44, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-                .contentTransition(.numericText(value: Double(sats)))
-                .animation(.easeInOut(duration: 0.25), value: sats)
-            Text("sats")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) { balanceHidden.toggle() }
+        } label: {
+            VStack(spacing: 4) {
+                if balanceHidden {
+                    Text("* * * * *")
+                        .font(.system(size: 44, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                } else {
+                    Text(CurrencyFormatter.formatNumber(sats))
+                        .font(.system(size: 44, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .contentTransition(.numericText(value: Double(sats)))
+                        .animation(.easeInOut(duration: 0.25), value: sats)
+                }
+                HStack(spacing: 4) {
+                    Text("sats")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: balanceHidden ? "eye.slash" : "eye")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .buttonStyle(.plain)
     }
+
+    // MARK: - Reconnecting banner
 
     private var reconnectingBanner: some View {
         HStack(spacing: 8) {
@@ -111,6 +254,8 @@ struct WalletView: View {
         .padding(.vertical, 8)
         .background(Color.wispSurfaceVariant.opacity(0.4), in: Capsule())
     }
+
+    // MARK: - Action row
 
     private var actionRow: some View {
         HStack(spacing: 32) {
@@ -136,88 +281,36 @@ struct WalletView: View {
         .buttonStyle(.plain)
     }
 
-    private var transactionsList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Transactions")
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 4)
-                .padding(.bottom, 8)
-            ForEach(store.transactions.prefix(20)) { tx in
-                transactionRow(tx)
-                if tx.id != store.transactions.prefix(20).last?.id {
-                    Divider().opacity(0.25).padding(.leading, 52)
-                }
-            }
-        }
-    }
+    // MARK: - Recent transactions
 
     @ViewBuilder
-    private func transactionRow(_ tx: WalletTransaction) -> some View {
-        // For outgoing zaps we recorded the recipient's pubkey at send time; look up their profile.
-        let recipientPubkey = tx.counterpartyPubkey ?? ZapSender.recipient(forPaymentHash: tx.paymentHash)
-        let profile = recipientPubkey.flatMap { ProfileRepository.shared.get($0) }
-        let isIncoming = tx.type == .incoming
-        let amountColor: Color = isIncoming ? Color.wispRepostColor : .red.opacity(0.85)
-        let sats = abs(tx.amountMsats) / 1000
-        let feeSats = tx.feeMsats / 1000
+    private var recentTransactionsSection: some View {
+        if !store.transactions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Recent")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    NavigationLink(value: WalletRoute.transactions) {
+                        Text("All transactions")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.wispZapColor)
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.bottom, 8)
 
-        HStack(alignment: .center, spacing: 12) {
-            ZStack {
-                if let profile {
-                    CachedAvatarView(url: profile.picture, size: 40)
-                } else {
-                    Circle()
-                        .fill((isIncoming ? Color.wispRepostColor : Color.red).opacity(0.18))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: isIncoming ? "arrow.down" : "arrow.up")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(amountColor)
+                let recent = Array(store.transactions.prefix(5))
+                ForEach(recent) { tx in
+                    WalletTransactionRow(tx: tx)
+                    if tx.id != recent.last?.id {
+                        Divider().opacity(0.25).padding(.leading, 52)
+                    }
                 }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(profile?.displayString ?? (tx.description?.isEmpty == false ? tx.description! : (isIncoming ? "Received" : "Sent")))
-                    .font(.subheadline.weight(profile != nil ? .semibold : .regular))
-                    .lineLimit(1)
-                Text(relativeTime(from: Int(tx.settledAt ?? tx.createdAt)))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text("\(isIncoming ? "+" : "-")\(CurrencyFormatter.formatNumber(sats))")
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(amountColor)
-                    Text("sats")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                if !isIncoming, feeSats > 0 {
-                    Text("Fee: \(CurrencyFormatter.formatNumber(feeSats)) sats")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            .padding(.top, 8)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 4)
     }
-
-    private var modeFooter: some View {
-        HStack {
-            Text("Mode:").font(.caption2).foregroundStyle(.tertiary)
-            Text(store.mode == .nwc ? "Nostr Wallet Connect" : "Breez Spark")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Switch") {
-                setupMode = store.mode == .nwc ? .spark : .nwc
-            }
-            .font(.caption)
-        }
-        .padding(.top, 12)
-    }
-
 }
 
 // MARK: - Mode selection
