@@ -83,7 +83,7 @@ struct WalletSettingsView: View {
                             .foregroundStyle(.primary)
                         if !store.seedBackupAcknowledged {
                             Text("Not acknowledged")
-                                .font(.caption)
+                                .font(.footnote)
                                 .foregroundStyle(Color.wispZapColor)
                         }
                     }
@@ -127,7 +127,7 @@ struct WalletSettingsView: View {
             Button("Back up seed to relays") {
                 Task { await store.publishRelayBackup() }
             }
-            .font(.subheadline.weight(.medium))
+            .font(.footnote.weight(.medium))
             .foregroundStyle(Color.wispZapColor)
 
         case .publishing:
@@ -150,7 +150,7 @@ struct WalletSettingsView: View {
                     store.resetRelayBackupPublish()
                     Task { await store.publishRelayBackup() }
                 }
-                .font(.caption.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(Color.wispZapColor)
             }
 
@@ -164,7 +164,7 @@ struct WalletSettingsView: View {
                     store.resetRelayBackupPublish()
                     Task { await store.publishRelayBackup() }
                 }
-                .font(.caption.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(Color.wispZapColor)
             }
         }

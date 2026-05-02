@@ -121,7 +121,7 @@ struct NwcSetupView: View {
             .padding(.bottom, 32)
         }
         .background(Color.wispBackground.ignoresSafeArea())
-        .navigationTitle("Connect Wallet")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
