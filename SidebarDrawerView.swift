@@ -7,8 +7,6 @@ struct SidebarDrawerView: View {
     private var pubkey: String { keypair.pubkey }
     let onSelectTab: (BottomTab) -> Void
     let onLogout: () -> Void
-    var onSwitchAccount: (Keypair) -> Void = { _ in }
-    var onAddAccount: () -> Void = {}
     var onOpenProfile: () -> Void = {}
     var onOpenInterface: () -> Void = {}
     var onOpenKeys: () -> Void = {}
@@ -73,45 +71,22 @@ struct SidebarDrawerView: View {
     }
 
     private func loadStatus() async {
-        // Query write ∪ read ∪ top-scored relays in one shot. The previous
-        // write-then-read fallback missed statuses published from a different
-        // client whose relay set didn't intersect the current cache.
-        var relays = Set<String>()
-        for r in await RelayListRepository.shared.getWriteRelays(pubkey) { relays.insert(r) }
-        for r in await RelayListRepository.shared.getReadRelays(pubkey) { relays.insert(r) }
-        if let board = RelayScoreBoard.load(pubkey: pubkey) {
-            for r in board.scoredRelays.prefix(5) { relays.insert(r.url) }
-        }
-        if relays.isEmpty {
-            relays = ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol"]
-        }
+        var relays = await RelayListRepository.shared.getWriteRelays(pubkey)
+        if relays.isEmpty { relays = await RelayListRepository.shared.getReadRelays(pubkey) }
+        if relays.isEmpty { return }
         let filter = NostrFilter(
             kinds: [Nip38.kindUserStatus],
             authors: [pubkey],
             dTags: [Nip38.dTagGeneral],
             limit: 1
         )
-        let events = await RelayPool.query(relays: Array(relays), filter: filter, timeout: 10)
+        let events = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
         guard let latest = events.max(by: { $0.createdAt < $1.createdAt }) else { return }
         let trimmed = latest.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolved: String? = trimmed.isEmpty ? nil : trimmed
-        userStatus = resolved
-        let defaults = UserDefaults.standard
-        if let resolved {
-            defaults.set(resolved, forKey: Self.cachedStatusKey(pubkey))
-        } else {
-            defaults.removeObject(forKey: Self.cachedStatusKey(pubkey))
-        }
+        userStatus = trimmed.isEmpty ? nil : trimmed
     }
 
     private func publishStatus(_ content: String) async {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaults = UserDefaults.standard
-        if trimmed.isEmpty {
-            defaults.removeObject(forKey: Self.cachedStatusKey(pubkey))
-        } else {
-            defaults.set(trimmed, forKey: Self.cachedStatusKey(pubkey))
-        }
         guard let priv = Hex.decode(keypair.privkey) else { return }
         guard let event = try? Nip38.buildStatus(privkey32: priv, pubkey: pubkey, content: content) else { return }
         var relays = await RelayListRepository.shared.getWriteRelays(pubkey)
@@ -191,13 +166,6 @@ struct SidebarDrawerView: View {
             }
         }
         .task(id: pubkey) {
-            // Ensure the active account is always in the persisted list so the
-            // account switcher shows it even on installs that predate this list.
-            NostrKey.registerInAccountList(pubkey)
-            // Show the last-seen status immediately from cache, then refresh
-            // from relays in the background. Avoids "Set status..." flashing
-            // when relay reads are slow or transiently empty.
-            loadCachedStatus()
             await loadStatus()
         }
         .sheet(isPresented: $showQRSheet) {
@@ -316,40 +284,14 @@ struct SidebarDrawerView: View {
     private var accountPickerSection: some View {
         VStack(spacing: 0) {
             ForEach(accounts, id: \.self) { acctPubkey in
-                // Active account: use the already-loaded profile prop (guaranteed correct).
-                // Inactive accounts: read directly from UserDefaults to avoid in-memory cache
-                // contamination where another pubkey's profile could bleed through.
-                let acctProfile = acctPubkey == pubkey
-                    ? profile
-                    : ProfileRepository.shared.persistedProfile(for: acctPubkey)
-                let acctName: String = {
-                    if let name = acctProfile?.displayString, !name.isEmpty { return name }
-                    return String(acctPubkey.prefix(8)) + "\u{2026}"
-                }()
-                let acctSubtitle: String = {
-                    if let nip05 = acctProfile?.nip05, !nip05.isEmpty { return nip05 }
-                    return String(acctPubkey.prefix(8)) + "\u{2026}"
-                }()
                 Button {
-                    guard acctPubkey != pubkey,
-                          let newKeypair = NostrKey.switchAccount(pubkey: acctPubkey) else {
-                        accountsExpanded = false
-                        return
-                    }
                     accountsExpanded = false
-                    onSwitchAccount(newKeypair)
                 } label: {
                     HStack(spacing: 12) {
-                        CachedAvatarView(url: acctProfile?.picture, size: 32)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(acctName)
-                                .font(.system(size: 14))
-                                .foregroundStyle(.primary)
-                            Text(acctSubtitle)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                        CachedAvatarView(url: nil, size: 32)
+                        Text(String(acctPubkey.prefix(12)) + "\u{2026}")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.primary)
                         Spacer()
                         if acctPubkey == pubkey {
                             Image(systemName: "checkmark")
@@ -363,9 +305,9 @@ struct SidebarDrawerView: View {
                 }
                 .buttonStyle(.plain)
             }
+
             Button {
                 accountsExpanded = false
-                onAddAccount()
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "plus.circle")
