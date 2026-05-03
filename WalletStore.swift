@@ -55,6 +55,8 @@ final class WalletStore {
         self.mode = WalletMode.load(for: keypair.pubkey)
         self.balanceMsats = WalletCache.loadBalance(for: keypair.pubkey)
         self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
+        // NWC lud16 is embedded in the stored URI — no connection needed.
+        self.lightningAddress = Self.cachedLightningAddress(for: keypair.pubkey)
     }
 
     // MARK: - Seed backup (Spark mnemonic wallets only)
@@ -110,6 +112,17 @@ final class WalletStore {
         self.mode = WalletMode.load(for: keypair.pubkey)
         self.balanceMsats = WalletCache.loadBalance(for: keypair.pubkey)
         self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
+        self.lightningAddress = Self.cachedLightningAddress(for: keypair.pubkey)
+    }
+
+    /// Synchronously extracts a lightning address from stored credentials without a network
+    /// call. For NWC wallets the lud16 is embedded in the URI; for Spark it requires an async
+    /// SDK call so we return nil here (refreshLightningAddress() fills it in later).
+    private static func cachedLightningAddress(for pubkey: String) -> String? {
+        guard WalletMode.load(for: pubkey) == .nwc,
+              let uri = WalletKeychain.loadNwcUri(for: pubkey),
+              let conn = NwcConnection.parse(uri) else { return nil }
+        return conn.lud16
     }
 
     /// Try to bring up whatever wallet the user previously configured. Safe to call repeatedly.

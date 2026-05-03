@@ -199,6 +199,7 @@ struct SidebarDrawerView: View {
                             .foregroundStyle(torEnabled ? Color.wispPrimary : .secondary.opacity(0.5))
                             .frame(width: 36, height: 36)
                     }
+                    .buttonStyle(.plain)
 
                     Button {
                         @Bindable var s = settings
@@ -209,6 +210,7 @@ struct SidebarDrawerView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 36, height: 36)
                     }
+                    .buttonStyle(.plain)
 
                     Button {
                         showQRSheet = true
@@ -218,6 +220,7 @@ struct SidebarDrawerView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 36, height: 36)
                     }
+                    .buttonStyle(.plain)
                 }
             }
 
