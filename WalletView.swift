@@ -462,14 +462,53 @@ struct SendInvoiceSheet: View {
     @Bindable var store: WalletStore
     var dismiss: () -> Void
     @State private var invoice: String = ""
+    @State private var amountText: String = ""
+    @State private var inputType: WalletInputType = .unknown
+    @State private var isDetecting = false
     @State private var status: String?
     @State private var inFlight = false
     @State private var showScanner = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var galleryError: String?
+    @State private var detectTask: Task<Void, Never>?
 
     private var decoded: Bolt11.DecodedInvoice? { Bolt11.decode(invoice) }
-    private var isReady: Bool { !invoice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var trimmedInvoice: String { invoice.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var amountSats: Int64? {
+        guard let v = Int64(amountText.filter { $0.isNumber }), v > 0 else { return nil }
+        return v
+    }
+
+    private var canProceed: Bool {
+        if trimmedInvoice.isEmpty { return false }
+        switch inputType {
+        case .bolt11(let amt): return amt != nil
+        case .sparkLnurl, .lightningAddressNeedsResolve: return amountSats != nil
+        case .unknown: return false
+        }
+    }
+
+    private var needsAmountField: Bool {
+        switch inputType {
+        case .sparkLnurl, .lightningAddressNeedsResolve: return true
+        case .bolt11(let amt): return amt == nil
+        default: return false
+        }
+    }
+
+    private var buttonLabel: String {
+        switch inputType {
+        case .bolt11(let amt): return amt != nil ? "Pay" : "Next"
+        case .sparkLnurl, .lightningAddressNeedsResolve: return amountSats != nil ? "Pay" : "Next"
+        case .unknown: return "Next"
+        }
+    }
+
+    private var lnurlBounds: (min: Int64, max: Int64)? {
+        if let info = inputType.resolvedInfo { return (info.minSats, info.maxSats) }
+        return nil
+    }
 
     var body: some View {
         ScrollView {
@@ -537,6 +576,7 @@ struct SendInvoiceSheet: View {
                     }
                 }
                 .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+                .onChange(of: invoice) { _, _ in scheduleDetect() }
                 .onChange(of: selectedPhoto) { _, item in
                     guard let item else { return }
                     Task { await decodeQRFromPhoto(item) }
@@ -550,7 +590,39 @@ struct SendInvoiceSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // Decoded preview
+                // Amount field — shown for lightning addresses and LNURL
+                if needsAmountField {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: "bitcoinsign")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                            TextField("Amount in sats", text: $amountText)
+                                .keyboardType(.numberPad)
+                                .font(.system(.body, design: .rounded))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+                        if let bounds = lnurlBounds {
+                            Text("Min \(CurrencyFormatter.formatNumber(bounds.min)) – max \(CurrencyFormatter.formatNumber(bounds.max)) sats")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                // Detecting indicator
+                if isDetecting {
+                    HStack(spacing: 8) {
+                        ProgressView().scaleEffect(0.75)
+                        Text("Resolving…").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                // Decoded preview (bolt11 only)
                 if let d = decoded {
                     VStack(alignment: .leading, spacing: 6) {
                         if let amt = d.amountSats {
@@ -580,6 +652,21 @@ struct SendInvoiceSheet: View {
                     .background(Color.wispSurfaceVariant.opacity(0.3), in: RoundedRectangle(cornerRadius: 14))
                 }
 
+                // Lightning address / LNURL preview
+                if case .sparkLnurl(let info) = inputType {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Text(info.label).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else if case .lightningAddressNeedsResolve(let addr, _) = inputType {
+                    HStack(spacing: 8) {
+                        Image(systemName: "at.circle").foregroundStyle(Color.wispZapColor)
+                        Text(addr).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 // Status
                 if let status {
                     HStack(spacing: 8) {
@@ -589,13 +676,13 @@ struct SendInvoiceSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // Pay button
+                // Pay / Next button
                 Button {
                     Task { await pay() }
                 } label: {
                     Group {
                         if inFlight { ProgressView().tint(.white) } else {
-                            Text("Pay")
+                            Text(buttonLabel)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.white)
                         }
@@ -603,11 +690,11 @@ struct SendInvoiceSheet: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(
-                        isReady ? Color.wispZapColor : Color.wispSurfaceVariant,
+                        canProceed ? Color.wispZapColor : Color.wispSurfaceVariant,
                         in: RoundedRectangle(cornerRadius: 14)
                     )
                 }
-                .disabled(!isReady || inFlight)
+                .disabled(!canProceed || inFlight)
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
@@ -632,11 +719,39 @@ struct SendInvoiceSheet: View {
         }
     }
 
+    private func scheduleDetect() {
+        detectTask?.cancel()
+        let input = trimmedInvoice
+        guard !input.isEmpty else { inputType = .unknown; return }
+        detectTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            isDetecting = true
+            let result = await store.detectInputType(input)
+            isDetecting = false
+            withAnimation(.easeInOut(duration: 0.2)) { inputType = result }
+        }
+    }
+
     private func pay() async {
         inFlight = true; defer { inFlight = false }
-        let trimmed = normalizeInvoice(invoice)
-        switch await store.payInvoice(trimmed) {
-        case .success: status = "Paid ✓"; dismiss()
+        status = nil
+        let input = trimmedInvoice
+        let result: Result<String, WalletError>
+
+        switch inputType {
+        case .bolt11:
+            result = await store.payInvoice(normalizeInvoice(input))
+        case .sparkLnurl, .lightningAddressNeedsResolve:
+            guard let sats = amountSats else { return }
+            result = await store.payLightningAddress(input, amountSats: sats)
+        case .unknown:
+            // Try as raw bolt11 anyway
+            result = await store.payInvoice(normalizeInvoice(input))
+        }
+
+        switch result {
+        case .success: dismiss()
         case .failure(let err): status = err.localizedDescription
         }
     }

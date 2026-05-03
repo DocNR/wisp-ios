@@ -276,6 +276,44 @@ final class WalletStore {
         return await wallet.payInvoice(bolt11)
     }
 
+    /// Detect whether the pasted string is a lightning address, LNURL, or bolt11 invoice.
+    func detectInputType(_ input: String) async -> WalletInputType {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.isEmpty { return .unknown }
+
+        // Spark can parse natively via the SDK.
+        if let spark = wallet as? SparkWallet {
+            if let walletType = await spark.detectWalletInputType(trimmed) {
+                return walletType
+            }
+        }
+
+        // NWC / fallback: manual detection.
+        if let decoded = Bolt11.decode(trimmed) {
+            return .bolt11(amountSats: decoded.amountSats)
+        }
+        if LnurlResolver.isLightningAddress(trimmed) {
+            return .lightningAddressNeedsResolve(trimmed, info: nil)
+        }
+        return .unknown
+    }
+
+    /// Pay a lightning address via LNURL-pay. For Spark uses the native SDK path;
+    /// for NWC resolves the LNURL manually and pays the resulting bolt11.
+    func payLightningAddress(_ address: String, amountSats: Int64) async -> Result<String, WalletError> {
+        // Spark: parse + pay via the SDK's native LNURL-pay path.
+        if let spark = wallet as? SparkWallet {
+            let result = await spark.parseAndPayLnurl(address, amountSats: amountSats)
+            if result != nil { return result! }
+            // nil means "not a LNURL input" — fall through to manual resolution.
+        }
+        // NWC / fallback: resolve LNURL manually and pay the resulting bolt11.
+        switch await LnurlResolver.resolve(address, amountMsats: amountSats * 1000) {
+        case .success(let bolt11): return await payInvoice(bolt11)
+        case .failure(let err):   return .failure(err)
+        }
+    }
+
     func makeInvoice(amountSats: Int64, description: String) async -> Result<String, WalletError> {
         guard let wallet else { return .failure(.notConnected) }
         return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description)

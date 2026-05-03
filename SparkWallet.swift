@@ -210,6 +210,69 @@ final class SparkWallet: Wallet {
         }
     }
 
+    /// Parse arbitrary input (bolt11, lightning address, LNURL, …) and return the SDK's
+    /// `InputType` so the caller can decide which payment path to use.
+    func parseInput(_ input: String) async -> InputType? {
+        guard let sdk else { return nil }
+        return try? await sdk.parse(input: input)
+    }
+
+    /// Parse input and return a `WalletInputType` for the UI layer without exposing SDK types.
+    func detectWalletInputType(_ input: String) async -> WalletInputType? {
+        guard let parsed = await parseInput(input) else { return nil }
+        switch parsed {
+        case .bolt11Invoice(let d):
+            return .bolt11(amountSats: d.amountMsat.map { Int64($0 / 1000) })
+        case .lnurlPay(let d):
+            return .sparkLnurl(info: ResolvedLnurlInfo(
+                minSats: Int64(d.minSendable / 1000),
+                maxSats: Int64(d.maxSendable / 1000),
+                label: d.address ?? d.domain
+            ))
+        case .lightningAddress(let d):
+            let pr = d.payRequest
+            return .sparkLnurl(info: ResolvedLnurlInfo(
+                minSats: Int64(pr.minSendable / 1000),
+                maxSats: Int64(pr.maxSendable / 1000),
+                label: pr.address ?? pr.domain
+            ))
+        default:
+            return .unknown
+        }
+    }
+
+    /// Parse input as LNURL/lightning address and pay. Returns nil if the input is not
+    /// a LNURL type (caller should fall back to manual resolution).
+    func parseAndPayLnurl(_ input: String, amountSats: Int64) async -> Result<String, WalletError>? {
+        guard let parsed = await parseInput(input) else { return nil }
+        switch parsed {
+        case .lnurlPay(let d):
+            return await payLnurlPayRequest(d, amountSats: amountSats)
+        case .lightningAddress(let d):
+            return await payLnurlPayRequest(d.payRequest, amountSats: amountSats)
+        default:
+            return nil   // not a LNURL input
+        }
+    }
+
+    /// Pay a resolved LNURL-pay endpoint (from a lightning address or lnurl: URI).
+    func payLnurlPayRequest(_ payRequest: LnurlPayRequestDetails, amountSats: Int64) async -> Result<String, WalletError> {
+        guard let sdk else { return .failure(.notConnected) }
+        do {
+            emit("Preparing LNURL payment…")
+            let prepare = try await sdk.prepareLnurlPay(request: PrepareLnurlPayRequest(
+                amount: BInt(amountSats),
+                payRequest: payRequest
+            ))
+            emit("Sending payment…")
+            let response = try await sdk.lnurlPay(request: LnurlPayRequest(prepareResponse: prepare))
+            return .success(response.payment.id)
+        } catch {
+            emit("Payment failed: \(error.localizedDescription)")
+            return .failure(.other(error.localizedDescription))
+        }
+    }
+
     func payInvoice(_ bolt11: String) async -> Result<String, WalletError> {
         guard let sdk else { return .failure(.notConnected) }
         do {
