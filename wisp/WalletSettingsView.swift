@@ -5,43 +5,33 @@ import SwiftUI
 enum WalletBalanceUnit: String, CaseIterable {
     case sats, btc, msats
 
-    var label: String {
-        switch self {
-        case .sats:  return "sats"
-        case .btc:   return "BTC"
-        case .msats: return "msat"
-        }
-    }
-
-    func format(_ sats: Int64) -> String {
-        switch self {
-        case .sats:  return "\(CurrencyFormatter.formatNumber(sats)) sats"
-        case .btc:
-            let btc = Double(sats) / 100_000_000.0
-            if btc == 0 { return "₿0" }
-            if btc < 0.001 { return String(format: "₿%.8f", btc) }
-            return String(format: "₿%.5f", btc)
-        case .msats: return "\(CurrencyFormatter.formatNumber(sats * 1000)) msat"
-        }
-    }
-
+    /// Number-only string for the large balance display (no prefix symbol).
     func formatNumber(_ sats: Int64) -> String {
         switch self {
-        case .sats:  return CurrencyFormatter.formatNumber(sats)
+        case .sats:
+            return CurrencyFormatter.formatNumber(sats)
         case .btc:
-            let btc = Double(sats) / 100_000_000.0
-            if btc == 0 { return "0" }
-            if btc < 0.001 { return String(format: "%.8f", btc) }
-            return String(format: "%.5f", btc)
-        case .msats: return CurrencyFormatter.formatNumber(sats * 1000)
+            return CurrencyFormatter.formatNumber(sats)
+        case .msats:
+            return CurrencyFormatter.formatNumber(sats)
         }
     }
 
+    /// SF Symbol name shown as a grey prefix beside the number; nil for sats.
+    var symbolPrefix: String? {
+        switch self {
+        case .sats:  return nil
+        case .btc:   return "bitcoinsign"
+        case .msats: return "bolt.fill"
+        }
+    }
+
+    /// Small label shown below the balance number; empty for modes that use a prefix symbol.
     var unitLabel: String {
         switch self {
         case .sats:  return "sats"
-        case .btc:   return "BTC"
-        case .msats: return "msat"
+        case .btc:   return ""
+        case .msats: return ""
         }
     }
 

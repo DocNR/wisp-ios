@@ -17,6 +17,7 @@ struct WalletView: View {
     @State private var setupMode: WalletMode? = nil
     @State private var showSend = false
     @State private var showReceive = false
+    @State private var showAllTransactions = false
     @AppStorage private var balanceHidden: Bool
     @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
 
@@ -66,6 +67,13 @@ struct WalletView: View {
             NavigationStack {
                 ReceiveInvoiceSheet(store: store, dismiss: { showReceive = false })
             }
+        }
+        .sheet(isPresented: $showAllTransactions) {
+            NavigationStack {
+                TransactionHistoryView(store: store)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -127,6 +135,7 @@ struct WalletView: View {
                 }
                 .frame(minHeight: geo.size.height)
             }
+            .scrollDisabled(true)
             .refreshable {
                 await refreshWallet()
             }
@@ -239,15 +248,24 @@ struct WalletView: View {
                             .font(.system(size: 52, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
                     } else {
-                        Text(unit.formatNumber(sats))
-                            .font(.system(size: 52, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.primary)
-                            .contentTransition(.numericText(value: Double(sats)))
-                            .animation(.easeInOut(duration: 0.25), value: sats)
+                        HStack(alignment: .center, spacing: 6) {
+                            if let symbol = unit.symbolPrefix {
+                                Image(systemName: symbol)
+                                    .font(.system(size: 34, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(unit.formatNumber(sats))
+                                .font(.system(size: 52, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.primary)
+                                .contentTransition(.numericText(value: Double(sats)))
+                                .animation(.easeInOut(duration: 0.25), value: sats)
+                        }
                     }
-                    Text(unit.unitLabel)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    if !unit.unitLabel.isEmpty {
+                        Text(unit.unitLabel)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -355,10 +373,20 @@ struct WalletView: View {
                     .textCase(.uppercase)
                     .tracking(0.5)
                 Spacer()
-                NavigationLink(value: WalletRoute.transactions) {
-                    Text("All transactions")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.wispZapColor)
+                if store.transactions.count > 5 {
+                    Button {
+                        showAllTransactions = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("more")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 20)
@@ -373,9 +401,24 @@ struct WalletView: View {
                     Divider().opacity(0.12).padding(.leading, 68)
                 }
             }
+
+            // Invisible swipe-up handle at the bottom
+            Color.clear
+                .frame(height: 20)
         }
         .padding(.bottom, 8)
         .background(Color.wispBackground)
+        .contentShape(Rectangle())
+        .gesture(
+            store.transactions.count > 5
+                ? DragGesture(minimumDistance: 16, coordinateSpace: .local)
+                    .onEnded { value in
+                        if value.translation.height < -16 {
+                            showAllTransactions = true
+                        }
+                    }
+                : nil
+        )
     }
 }
 
@@ -404,7 +447,7 @@ struct WalletModeSelectionView: View {
             Spacer()
 
             VStack(spacing: 12) {
-                modeCard(
+                modeRow(
                     title: "Spark wallet",
                     subtitle: "Self-custody, embedded. Create new or restore from seed/relays.",
                     logo: AnyView(
@@ -416,7 +459,7 @@ struct WalletModeSelectionView: View {
                     ),
                     action: { onPick(.spark) }
                 )
-                modeCard(
+                modeRow(
                     title: "Nostr Wallet Connect",
                     subtitle: "Paste a connection string from Alby, Zeus, Rizful, Minibits, etc.",
                     logo: AnyView(
@@ -434,11 +477,11 @@ struct WalletModeSelectionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func modeCard(title: String, subtitle: String, logo: AnyView, action: @escaping () -> Void) -> some View {
+    private func modeRow(title: String, subtitle: String, logo: AnyView, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 logo.frame(width: 36)
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.subheadline.weight(.semibold))
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
@@ -449,8 +492,10 @@ struct WalletModeSelectionView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(18)
-            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
     }

@@ -319,11 +319,25 @@ final class WalletStore {
         return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description)
     }
 
+    private(set) var hasMoreTransactions: Bool = false
+
     func refreshTransactions() async {
         guard let wallet else { return }
-        if case .success(let txs) = await wallet.listTransactions(limit: 50, offset: 0) {
+        let pageSize = 50
+        if case .success(let txs) = await wallet.listTransactions(limit: pageSize, offset: 0) {
             transactions = txs
+            hasMoreTransactions = txs.count == pageSize
             WalletCache.saveTransactions(txs, for: keypair.pubkey)
+        }
+    }
+
+    func loadMoreTransactions() async {
+        guard let wallet, hasMoreTransactions else { return }
+        let pageSize = 50
+        let offset = transactions.count
+        if case .success(let more) = await wallet.listTransactions(limit: pageSize, offset: offset) {
+            transactions.append(contentsOf: more)
+            hasMoreTransactions = more.count == pageSize
         }
     }
 

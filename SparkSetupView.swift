@@ -82,21 +82,19 @@ struct SparkSetupView: View {
             .frame(maxWidth: .infinity)
 
             // Option rows
-            VStack(spacing: 0) {
+            VStack(spacing: 12) {
                 optionRow(
                     icon: "plus.circle.fill",
                     title: "Create new wallet",
                     subtitle: "Generate a fresh 12-word seed phrase",
                     action: { startCreate() }
                 )
-                Divider().opacity(0.25).padding(.leading, 56)
                 optionRow(
                     icon: "arrow.uturn.backward.circle.fill",
                     title: "Restore from seed phrase",
-                    subtitle: "12 / 15 / 18 / 21 / 24 words",
+                    subtitle: "12 words from a Spark-based wallet",
                     action: { mode = .restoreSeed }
                 )
-                Divider().opacity(0.25).padding(.leading, 56)
                 optionRow(
                     icon: "icloud.and.arrow.down.fill",
                     title: "Restore from relays",
@@ -104,7 +102,6 @@ struct SparkSetupView: View {
                     action: { mode = .restoreRelays; Task { await store.searchRelayBackup() } }
                 )
             }
-            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
         }
     }
 
@@ -126,7 +123,8 @@ struct SparkSetupView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .contentShape(Rectangle())
+            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
     }
