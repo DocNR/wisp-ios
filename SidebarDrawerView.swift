@@ -353,7 +353,7 @@ struct SidebarDrawerView: View {
             DrawerRow(icon: "envelope", label: "Messages") {
                 onSelectTab(.messages)
             }
-            DrawerRow(icon: "bolt.fill", label: "Wallet") {
+            DrawerRow(icon: "creditcard", label: "Wallet") {
                 onSelectTab(.wallet)
             }
             DrawerRow(icon: "list.bullet", label: "Lists") {
