@@ -188,6 +188,7 @@ struct WalletView: View {
 
     private var balanceCard: some View {
         let sats = store.balanceMsats.map { $0 / 1000 } ?? 0
+        let syncing = store.mode != nil && !store.isConnected
         return VStack(spacing: 14) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { balanceHidden.toggle() }
@@ -211,6 +212,19 @@ struct WalletView: View {
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.plain)
+            .opacity(syncing ? (syncPulse ? 0.35 : 1.0) : 1.0)
+            .animation(
+                syncing
+                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                    : .easeInOut(duration: 0.25),
+                value: syncPulse
+            )
+            .onChange(of: syncing) { _, isSyncing in
+                syncPulse = isSyncing
+            }
+            .onAppear {
+                syncPulse = syncing
+            }
 
             // Lightning address
             if let addr = store.lightningAddress {
@@ -220,6 +234,7 @@ struct WalletView: View {
     }
 
     @State private var addressCopied = false
+    @State private var syncPulse = false
 
     private func lightningAddressPill(_ address: String) -> some View {
         Button {

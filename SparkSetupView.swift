@@ -74,7 +74,7 @@ struct SparkSetupView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(height: 22)
-                Text("Self-custodial Lightning, powered by Spark and Breez.")
+                Text("Self-custodial Lightning,\npowered by Spark and Breez.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
