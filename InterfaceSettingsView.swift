@@ -194,25 +194,39 @@ struct InterfaceSettingsView: View {
                         }
                     }
 
-                    Divider()
-                        .padding(.vertical, 4)
-                    HStack {
-                        Text("Zap icon")
-                            .foregroundStyle(theme.palette.onSurface)
-                        Spacer()
-                        Picker("", selection: $settings.zapIconStyle) {
-                            Image(systemName: "bitcoinsign").tag(AppSettings.ZapIconStyle.bitcoin)
-                            Image(systemName: "bolt.fill").tag(AppSettings.ZapIconStyle.bolt)
+                    if !settings.fiatModeEnabled {
+                        Divider()
+                            .padding(.vertical, 4)
+                        HStack {
+                            Text("Zap icon")
+                                .foregroundStyle(theme.palette.onSurface)
+                            Spacer()
+                            HStack(spacing: 12) {
+                                Button {
+                                    settings.zapIconStyle = .bitcoin
+                                } label: {
+                                    Image(systemName: "bitcoinsign")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .foregroundStyle(settings.zapIconStyle == .bitcoin
+                                                         ? theme.primary
+                                                         : theme.palette.onSurfaceVariant.opacity(0.7))
+                                        .frame(width: 24, height: 24)
+                                }
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    settings.zapIconStyle = .bolt
+                                } label: {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .foregroundStyle(settings.zapIconStyle == .bolt
+                                                         ? theme.primary
+                                                         : theme.palette.onSurfaceVariant.opacity(0.7))
+                                        .frame(width: 24, height: 24)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 100)
-                        .disabled(settings.fiatModeEnabled)
-                        .opacity(settings.fiatModeEnabled ? 0.4 : 1)
-                    }
-                    if settings.fiatModeEnabled {
-                        Text("Using currency icon in fiat mode.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.palette.onSurfaceVariant)
                     }
                 }
 

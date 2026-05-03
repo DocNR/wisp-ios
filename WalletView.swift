@@ -505,6 +505,7 @@ struct WalletModeSelectionView: View {
 
 struct SendInvoiceSheet: View {
     @Bindable var store: WalletStore
+    @Environment(AppSettings.self) private var settings
     var dismiss: () -> Void
     @State private var invoice: String = ""
     @State private var amountText: String = ""
@@ -639,10 +640,19 @@ struct SendInvoiceSheet: View {
                 if needsAmountField {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Image(systemName: "bitcoinsign")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                            TextField("Amount in sats", text: $amountText)
+                            Group {
+                                if settings.fiatModeEnabled {
+                                    Text(ExchangeRateService.currency(for: settings.fiatCurrency).symbol)
+                                } else {
+                                    Image(systemName: settings.zapSymbolName)
+                                }
+                            }
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            TextField(settings.fiatModeEnabled
+                                      ? "Amount in \(settings.fiatCurrency)"
+                                      : "Amount in sats",
+                                      text: $amountText)
                                 .keyboardType(.numberPad)
                                 .font(.system(.body, design: .rounded))
                         }
@@ -839,6 +849,7 @@ struct SendInvoiceSheet: View {
 
 struct ReceiveInvoiceSheet: View {
     @Bindable var store: WalletStore
+    @Environment(AppSettings.self) private var settings
     var dismiss: () -> Void
     @State private var amount: String = ""
     @State private var description: String = ""
@@ -1020,7 +1031,7 @@ struct ReceiveInvoiceSheet: View {
                     TextField("0", text: $amount)
                         .keyboardType(.numberPad)
                         .font(.system(size: 32, weight: .semibold, design: .rounded))
-                    Text("sats")
+                    Text(settings.fiatModeEnabled ? settings.fiatCurrency : "sats")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }

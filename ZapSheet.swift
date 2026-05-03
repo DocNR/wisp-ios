@@ -60,6 +60,15 @@ struct ZapSheet: View {
         !inFlight && recipientLud16 != nil && store.activeWallet != nil && amountSats > 0
     }
 
+    /// Big amount shown in the hero. While typing custom, mirrors the raw input
+    /// (sats, no formatting). Otherwise: fiat-rendered in fiat mode, grouped sats
+    /// in non-fiat mode.
+    private var heroAmountText: String {
+        if isCustom && !customAmountText.isEmpty { return customAmountText }
+        if settings.fiatModeEnabled { return CurrencyFormatter.short(sats: amountSats) }
+        return CurrencyFormatter.formatNumber(amountSats)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -70,7 +79,7 @@ struct ZapSheet: View {
                             .font(.system(size: 40, weight: .semibold))
                             .foregroundStyle(Color.wispZapColor)
 
-                        Text("Send Zap")
+                        Text(settings.fiatModeEnabled ? "Send Money" : "Send Zap")
                             .font(.title2.weight(.bold))
 
                         // Big amount display — tap to edit
@@ -80,16 +89,16 @@ struct ZapSheet: View {
                             amountFocused = true
                         } label: {
                             VStack(spacing: 2) {
-                                Text(isCustom && !customAmountText.isEmpty
-                                     ? customAmountText
-                                     : CurrencyFormatter.formatNumber(amountSats))
+                                Text(heroAmountText)
                                     .font(.system(size: 48, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.wispZapColor)
                                     .contentTransition(.numericText(value: Double(amountSats)))
                                     .animation(.easeInOut(duration: 0.15), value: amountSats)
-                                Text("sats")
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(Color.wispZapColor.opacity(0.8))
+                                if !settings.fiatModeEnabled {
+                                    Text("sats")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Color.wispZapColor.opacity(0.8))
+                                }
                             }
                         }
                         .buttonStyle(.plain)
@@ -144,14 +153,8 @@ struct ZapSheet: View {
                                     customAmountText = ""
                                     isCustom = false
                                 } label: {
-                                    HStack(spacing: 4) {
-                                        if amountSats == sats && !isCustom {
-                                            Image(systemName: "bolt.fill")
-                                                .font(.system(size: 11, weight: .bold))
-                                        }
-                                        Text(CurrencyFormatter.short(sats: sats))
-                                            .font(.subheadline.weight(.semibold))
-                                    }
+                                    Text(CurrencyFormatter.short(sats: sats))
+                                        .font(.subheadline.weight(.semibold))
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 10)
                                     .background(
@@ -169,16 +172,10 @@ struct ZapSheet: View {
                             Button {
                                 isCustom = true
                             } label: {
-                                HStack(spacing: 4) {
-                                    if isCustom {
-                                        Image(systemName: "bolt.fill")
-                                            .font(.system(size: 11, weight: .bold))
-                                    }
-                                    Text(isCustom && amountSats > 0
-                                         ? CurrencyFormatter.short(sats: amountSats)
-                                         : "Custom")
-                                        .font(.subheadline.weight(.semibold))
-                                }
+                                Text(isCustom && amountSats > 0
+                                     ? CurrencyFormatter.short(sats: amountSats)
+                                     : "Custom")
+                                    .font(.subheadline.weight(.semibold))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 10)
                                 .background(isCustom ? Color.wispZapColor : Color.wispSurfaceVariant.opacity(0.5), in: Capsule())
@@ -287,7 +284,9 @@ struct ZapSheet: View {
                         } else {
                             HStack(spacing: 6) {
                                 settings.zapImage
-                                Text("Zap \(CurrencyFormatter.formatNumber(amountSats)) sats")
+                                Text(settings.fiatModeEnabled
+                                     ? "Send \(CurrencyFormatter.short(sats: amountSats))"
+                                     : "Zap \(CurrencyFormatter.formatNumber(amountSats)) sats")
                                     .fontWeight(.semibold)
                             }
                         }
