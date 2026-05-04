@@ -322,4 +322,35 @@ final class ContentSizingTextView: UITextView {
         // Let SwiftUI control width via sizeThatFits; height too.
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
+
+    /// Only claim hit-test ownership over characters that carry a `.link`
+    /// attribute. Without this, UITextView's tap / selection gesture
+    /// recognizers absorb taps on plain body text and defer them while they
+    /// disambiguate against double-tap and long-press, which is what made
+    /// note cards in the feed need 2–3 taps before navigation fired. Returning
+    /// `false` here lets the touch fall through to the enclosing SwiftUI
+    /// `.onTapGesture` immediately, while taps on real links still reach
+    /// `textView(_:shouldInteractWith:)`.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard super.point(inside: point, with: event) else { return false }
+        guard let attr = attributedText, attr.length > 0 else { return false }
+        guard let position = closestPosition(to: point) else { return false }
+        let index = offset(from: beginningOfDocument, to: position)
+        guard index >= 0, index < attr.length else { return false }
+
+        // Verify the tap actually landed on the glyph (not just the closest
+        // position in trailing whitespace at line-end). `firstRect(for:)`
+        // returns the visual rect for the single character; a small slop
+        // keeps edge taps usable.
+        if let next = self.position(from: position, offset: 1),
+           let range = textRange(from: position, to: next) {
+            let rect = firstRect(for: range)
+            if !rect.isNull, !rect.isInfinite,
+               !rect.insetBy(dx: -2, dy: -2).contains(point) {
+                return false
+            }
+        }
+
+        return attr.attributes(at: index, effectiveRange: nil)[.link] != nil
+    }
 }

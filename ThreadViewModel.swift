@@ -334,15 +334,27 @@ final class ThreadViewModel {
     // MARK: - Cache seed
 
     private func seedFromCache() async {
-        // Try to find the seed event itself (it could be the root, or a reply that points to a root).
-        let seedScan = await eventStore.loadThreadCache(rootId: seedEventId)
-        if let seedEvent = seedScan.first(where: { $0.id == seedEventId }) {
+        // Fast path: direct id lookup for the seed so we can paint the root note
+        // immediately. The thread-cache substring scan below is O(all kind-1 events)
+        // and is what made tapping a feed note feel laggy — flipping `rootEvent`
+        // synchronously here lets the UI render before we walk the replies.
+        if let seedEvent = await eventStore.eventsByIds([seedEventId]).first {
             let resolvedRoot = Nip10.rootId(of: seedEvent) ?? seedEvent.id
             rootId = resolvedRoot
             events[seedEvent.id] = seedEvent
             if seedEvent.id == resolvedRoot {
                 rootEvent = seedEvent
+                isLoading = false
             }
+        }
+
+        // If the seed was a reply, pull its true root by id too so the header
+        // renders without waiting on the network.
+        if rootEvent == nil, rootId != seedEventId,
+           let cachedRoot = await eventStore.eventsByIds([rootId]).first {
+            events[cachedRoot.id] = cachedRoot
+            rootEvent = cachedRoot
+            isLoading = false
         }
 
         // Now load the full thread cache anchored at the resolved root.
