@@ -844,24 +844,31 @@ struct MainView: View {
                         // identity on every prepend, forcing SwiftUI to
                         // re-instantiate every visible PostCardView.
                         ForEach(viewModel.events, id: \.id) { event in
-                            NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
-                                PostCardView(
-                                    event: event,
-                                    profile: viewModel.profiles[event.pubkey],
-                                    profiles: viewModel.profiles,
-                                    engagement: nil,
-                                    onProfileTap: { pubkey in
-                                        Task { await viewModel.requestProfileIfNeeded(pubkey) }
-                                    },
-                                    onNoteTap: { eventId in
-                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: event.pubkey))
-                                    },
-                                    onHashtagTap: { tag in
-                                        feedPath.append(HashtagFeedRoute(tag: tag))
-                                    }
-                                )
+                            PostCardView(
+                                event: event,
+                                profile: viewModel.profiles[event.pubkey],
+                                profiles: viewModel.profiles,
+                                engagement: nil,
+                                onProfileTap: { pubkey in
+                                    Task { await viewModel.requestProfileIfNeeded(pubkey) }
+                                },
+                                onNoteTap: { eventId in
+                                    feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: event.pubkey))
+                                },
+                                onHashtagTap: { tag in
+                                    feedPath.append(HashtagFeedRoute(tag: tag))
+                                }
+                            )
+                            // Programmatic push instead of wrapping the card in a
+                            // NavigationLink — the link's press gesture loses races
+                            // against the inner avatar / action-bar / link buttons,
+                            // so taps on empty card space frequently needed two
+                            // presses to fire. Inner Buttons still capture their
+                            // own taps before this gesture runs.
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                feedPath.append(ThreadRoute(eventId: event.id, authorPubkey: event.pubkey))
                             }
-                            .buttonStyle(.plain)
                             .onAppear {
                                 engagementRepo.markVisible(eventId: event.id, author: event.pubkey)
                                 if let idx = viewModel.events.firstIndex(where: { $0.id == event.id }),
