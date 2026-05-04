@@ -190,7 +190,9 @@ struct FullScreenImageView: View {
     private func pinchGesture(in geo: GeometryProxy) -> some Gesture {
         MagnificationGesture()
             .onChanged { value in
-                scale = max(1.0, lastScale * value)
+                let newScale = max(1.0, lastScale * value)
+                scale = newScale
+                panOffset = clampedOffset(panOffset, scale: newScale, in: geo.size)
             }
             .onEnded { value in
                 let newScale = max(1.0, lastScale * value)
