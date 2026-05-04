@@ -17,6 +17,7 @@ final class WalletStore {
     /// Backup search/publish progress for the Spark relay-backup flow.
     private(set) var relayBackupSearchState: BackupSearchState = .idle
     private(set) var relayBackupPublishState: BackupPublishState = .idle
+    private(set) var lightningAddress: String?
 
     private var wallet: Wallet?
     private var statusTask: Task<Void, Never>?
@@ -52,6 +53,52 @@ final class WalletStore {
     init(keypair: Keypair) {
         self.keypair = keypair
         self.mode = WalletMode.load(for: keypair.pubkey)
+        self.balanceMsats = WalletCache.loadBalance(for: keypair.pubkey)
+        self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
+        // NWC lud16 is embedded in the stored URI — no connection needed.
+        self.lightningAddress = Self.cachedLightningAddress(for: keypair.pubkey)
+    }
+
+    // MARK: - Seed backup (Spark mnemonic wallets only)
+
+    /// Whether the user has acknowledged viewing their recovery phrase.
+    var seedBackupAcknowledged: Bool {
+        (wallet as? SparkWallet)?.isSeedBackupAcknowledged() ?? true
+    }
+
+    func acknowledgeSeedBackup() {
+        (wallet as? SparkWallet)?.setSeedBackupAcknowledged(true)
+    }
+
+    /// Mnemonic for the active Spark wallet, nil for NWC or nsec-derived.
+    var sparkMnemonic: String? {
+        (wallet as? SparkWallet)?.loadMnemonic()
+    }
+
+    // MARK: - Disconnect / delete
+
+    /// Disconnect the wallet, clear all credentials, and reset mode to nil so the
+    /// mode-selection screen re-appears. Safe to call from any wallet type.
+    func resetToNoWallet() {
+        let currentMode = mode
+        let currentPubkey = keypair.pubkey
+        disconnect()
+        switch currentMode {
+        case .nwc:
+            WalletKeychain.deleteNwcUri(for: currentPubkey)
+        case .spark:
+            WalletKeychain.deleteSparkMnemonic(for: currentPubkey)
+            WalletCache.clear(for: currentPubkey)
+        case nil:
+            break
+        }
+        WalletMode.clear(for: currentPubkey)
+        mode = nil
+        balanceMsats = nil
+        transactions = []
+        lightningAddress = nil
+        relayBackupSearchState = .idle
+        relayBackupPublishState = .idle
     }
 
     // MARK: - Wallet selection
@@ -63,14 +110,58 @@ final class WalletStore {
         disconnect()
         self.keypair = keypair
         self.mode = WalletMode.load(for: keypair.pubkey)
-        self.balanceMsats = nil
-        self.transactions = []
+        self.balanceMsats = WalletCache.loadBalance(for: keypair.pubkey)
+        self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
+        self.lightningAddress = Self.cachedLightningAddress(for: keypair.pubkey)
+    }
+
+    /// Synchronously extracts a lightning address from stored credentials without a network
+    /// call. For NWC wallets the lud16 is embedded in the URI; for Spark it requires an async
+    /// SDK call so we return nil here (refreshLightningAddress() fills it in later).
+    private static func cachedLightningAddress(for pubkey: String) -> String? {
+        guard WalletMode.load(for: pubkey) == .nwc,
+              let uri = WalletKeychain.loadNwcUri(for: pubkey),
+              let conn = NwcConnection.parse(uri) else { return nil }
+        return conn.lud16
     }
 
     /// Try to bring up whatever wallet the user previously configured. Safe to call repeatedly.
+    /// On a re-call after wallet is already wired up, just refresh balance + transactions
+    /// in the background so the user sees fresh data on tab open.
     func startIfConfigured() async {
-        guard wallet == nil, let mode else { return }
-        try? await switchToMode(mode)
+        guard let mode else { return }
+        if wallet == nil {
+            try? await switchToMode(mode)
+            await refreshLightningAddress()
+        } else if isConnected {
+            _ = await fetchBalance()
+            await refreshTransactions()
+            await refreshLightningAddress()
+        }
+    }
+
+    func refreshLightningAddress() async {
+        if let spark = wallet as? SparkWallet {
+            lightningAddress = await spark.fetchLightningAddress()
+        } else if let nwc = wallet as? NwcWallet {
+            lightningAddress = nwc.lud16
+        }
+    }
+
+    func checkLightningAddressAvailable(username: String) async -> Bool {
+        guard let spark = wallet as? SparkWallet else { return false }
+        return await spark.checkLightningAddressAvailable(username: username)
+    }
+
+    func registerLightningAddress(username: String) async throws {
+        guard let spark = wallet as? SparkWallet else { throw WalletError.notConnected }
+        lightningAddress = try await spark.registerLightningAddress(username: username)
+    }
+
+    func removeLightningAddress() async throws {
+        guard let spark = wallet as? SparkWallet else { throw WalletError.notConnected }
+        try await spark.deleteLightningAddress()
+        lightningAddress = nil
     }
 
     @discardableResult
@@ -90,6 +181,14 @@ final class WalletStore {
         WalletMode.save(newMode, for: keypair.pubkey)
         await newWallet.connect()
         isConnected = newWallet.isConnected
+        // Fire-and-forget the balance/transactions refresh — the dashboard already
+        // renders the cached values from `WalletCache` instantly, and live updates
+        // arrive via the wallet's balanceUpdates stream when the SDK syncs.
+        if newWallet.isConnected {
+            Task { _ = await self.fetchBalance() }
+            Task { await self.refreshTransactions() }
+            Task { await self.refreshLightningAddress() }
+        }
         return newWallet.isConnected
     }
 
@@ -104,7 +203,10 @@ final class WalletStore {
         WalletMode.save(.nwc, for: keypair.pubkey)
         await nwc.connect()
         isConnected = nwc.isConnected
-        if isConnected { _ = await fetchBalance() }
+        if isConnected {
+            Task { _ = await self.fetchBalance() }
+            Task { await self.refreshTransactions() }
+        }
         return isConnected
     }
 
@@ -119,7 +221,10 @@ final class WalletStore {
         WalletMode.save(.spark, for: keypair.pubkey)
         await spark.connect()
         isConnected = spark.isConnected
-        if isConnected { _ = await fetchBalance() }
+        if isConnected {
+            Task { _ = await self.fetchBalance() }
+            Task { await self.refreshTransactions() }
+        }
         return isConnected
     }
 
@@ -146,7 +251,9 @@ final class WalletStore {
         }
         balanceTask = Task { [weak self] in
             for await msats in wallet.balanceUpdates {
-                self?.balanceMsats = msats
+                guard let self else { return }
+                self.balanceMsats = msats
+                WalletCache.saveBalance(msats, for: self.keypair.pubkey)
             }
         }
     }
@@ -158,6 +265,7 @@ final class WalletStore {
         guard let wallet else { return nil }
         if case .success(let msats) = await wallet.fetchBalance() {
             balanceMsats = msats
+            WalletCache.saveBalance(msats, for: keypair.pubkey)
             return msats
         }
         return nil
@@ -168,15 +276,68 @@ final class WalletStore {
         return await wallet.payInvoice(bolt11)
     }
 
+    /// Detect whether the pasted string is a lightning address, LNURL, or bolt11 invoice.
+    func detectInputType(_ input: String) async -> WalletInputType {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.isEmpty { return .unknown }
+
+        // Spark can parse natively via the SDK.
+        if let spark = wallet as? SparkWallet {
+            if let walletType = await spark.detectWalletInputType(trimmed) {
+                return walletType
+            }
+        }
+
+        // NWC / fallback: manual detection.
+        if let decoded = Bolt11.decode(trimmed) {
+            return .bolt11(amountSats: decoded.amountSats)
+        }
+        if LnurlResolver.isLightningAddress(trimmed) {
+            return .lightningAddressNeedsResolve(trimmed, info: nil)
+        }
+        return .unknown
+    }
+
+    /// Pay a lightning address via LNURL-pay. For Spark uses the native SDK path;
+    /// for NWC resolves the LNURL manually and pays the resulting bolt11.
+    func payLightningAddress(_ address: String, amountSats: Int64) async -> Result<String, WalletError> {
+        // Spark: parse + pay via the SDK's native LNURL-pay path.
+        if let spark = wallet as? SparkWallet {
+            let result = await spark.parseAndPayLnurl(address, amountSats: amountSats)
+            if result != nil { return result! }
+            // nil means "not a LNURL input" — fall through to manual resolution.
+        }
+        // NWC / fallback: resolve LNURL manually and pay the resulting bolt11.
+        switch await LnurlResolver.resolve(address, amountMsats: amountSats * 1000) {
+        case .success(let bolt11): return await payInvoice(bolt11)
+        case .failure(let err):   return .failure(err)
+        }
+    }
+
     func makeInvoice(amountSats: Int64, description: String) async -> Result<String, WalletError> {
         guard let wallet else { return .failure(.notConnected) }
         return await wallet.makeInvoice(amountMsats: amountSats * 1000, description: description)
     }
 
+    private(set) var hasMoreTransactions: Bool = false
+
     func refreshTransactions() async {
         guard let wallet else { return }
-        if case .success(let txs) = await wallet.listTransactions(limit: 50, offset: 0) {
+        let pageSize = 50
+        if case .success(let txs) = await wallet.listTransactions(limit: pageSize, offset: 0) {
             transactions = txs
+            hasMoreTransactions = txs.count == pageSize
+            WalletCache.saveTransactions(txs, for: keypair.pubkey)
+        }
+    }
+
+    func loadMoreTransactions() async {
+        guard let wallet, hasMoreTransactions else { return }
+        let pageSize = 50
+        let offset = transactions.count
+        if case .success(let more) = await wallet.listTransactions(limit: pageSize, offset: offset) {
+            transactions.append(contentsOf: more)
+            hasMoreTransactions = more.count == pageSize
         }
     }
 

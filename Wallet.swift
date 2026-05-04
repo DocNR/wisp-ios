@@ -27,7 +27,7 @@ protocol Wallet: AnyObject {
     func listTransactions(limit: Int, offset: Int) async -> Result<[WalletTransaction], WalletError>
 }
 
-struct WalletTransaction: Identifiable {
+struct WalletTransaction: Identifiable, Codable {
     var id: String { paymentHash }
     let type: TransactionType
     let description: String?
@@ -38,9 +38,45 @@ struct WalletTransaction: Identifiable {
     let settledAt: Int64?
     let counterpartyPubkey: String?
 
-    enum TransactionType: String {
+    enum TransactionType: String, Codable {
         case incoming
         case outgoing
+    }
+}
+
+/// On-disk cache of last-known wallet state per pubkey. Lets the wallet tab
+/// show real numbers instantly on cold launch instead of `?` while the network
+/// catches up. Updated by `WalletStore` on every balance/transaction refresh.
+enum WalletCache {
+    private static func balanceKey(_ pubkey: String) -> String { "wallet_balance_msats_\(pubkey)" }
+    private static func txsKey(_ pubkey: String) -> String { "wallet_transactions_\(pubkey)" }
+
+    static func loadBalance(for pubkey: String) -> Int64? {
+        let v = UserDefaults.standard.object(forKey: balanceKey(pubkey)) as? NSNumber
+        return v?.int64Value
+    }
+
+    static func saveBalance(_ msats: Int64, for pubkey: String) {
+        UserDefaults.standard.set(NSNumber(value: msats), forKey: balanceKey(pubkey))
+    }
+
+    static func loadTransactions(for pubkey: String) -> [WalletTransaction] {
+        guard let data = UserDefaults.standard.data(forKey: txsKey(pubkey)),
+              let txs = try? JSONDecoder().decode([WalletTransaction].self, from: data) else { return [] }
+        return txs
+    }
+
+    static func saveTransactions(_ txs: [WalletTransaction], for pubkey: String) {
+        // Cap at 50 to keep UserDefaults footprint small.
+        let trimmed = Array(txs.prefix(50))
+        if let data = try? JSONEncoder().encode(trimmed) {
+            UserDefaults.standard.set(data, forKey: txsKey(pubkey))
+        }
+    }
+
+    static func clear(for pubkey: String) {
+        UserDefaults.standard.removeObject(forKey: balanceKey(pubkey))
+        UserDefaults.standard.removeObject(forKey: txsKey(pubkey))
     }
 }
 

@@ -40,6 +40,12 @@ final class NwcWallet: Wallet {
         WalletKeychain.loadNwcUri(for: pubkey) != nil
     }
 
+    /// Returns the `lud16` lightning address embedded in the NWC connection string, if present.
+    var lud16: String? {
+        guard let uri = WalletKeychain.loadNwcUri(for: pubkey) else { return nil }
+        return NwcConnection.parse(uri)?.lud16
+    }
+
     func saveConnection(_ uri: String) {
         WalletKeychain.saveNwcUri(uri, for: pubkey)
     }
@@ -73,7 +79,8 @@ final class NwcWallet: Wallet {
             ),
             timeout: 5
         )
-        let encryption = infoEvents.first.map(Nip47.parseInfoEncryption) ?? .nip04
+        // Default to NIP-44 when no info event is found — modern wallets expect it.
+        let encryption = infoEvents.first.map(Nip47.parseInfoEncryption) ?? .nip44
         conn = conn.with(encryption: encryption)
         emit("Encryption: \(encryption == .nip44 ? "NIP-44" : "NIP-04")")
         connection = conn

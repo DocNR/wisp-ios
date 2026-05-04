@@ -6,38 +6,136 @@ struct NwcSetupView: View {
     @State private var uri: String = ""
     @State private var status: String?
     @State private var inFlight = false
+    @State private var showScanner = false
+
+    private var isValidUri: Bool {
+        uri.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("nostr+walletconnect://")
+    }
 
     var body: some View {
-        Form {
-            Section("Connection string") {
-                TextEditor(text: $uri)
-                    .frame(minHeight: 140)
-                    .font(.system(.footnote, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                Button("Paste from clipboard") {
-                    if let s = UIPasteboard.general.string { uri = s }
+        ScrollView {
+            VStack(spacing: 28) {
+                // Logo + header
+                VStack(spacing: 14) {
+                    Image("NwcLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 40)
+                    Text("Nostr Wallet Connect")
+                        .font(.title2.weight(.semibold))
+                    Text("Paste the connection string\nfrom your NWC-compatible wallet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
-            }
-            Section {
-                Text("Looks like `nostr+walletconnect://<wallet pubkey>?relay=wss://...&secret=<hex>`")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if let status {
-                Text(status).font(.caption).foregroundStyle(.secondary)
-            }
-            Section {
+                .padding(.top, 8)
+
+                // Input card
+                VStack(alignment: .leading, spacing: 0) {
+                    TextEditor(text: $uri)
+                        .frame(minHeight: 120)
+                        .font(.system(.footnote, design: .monospaced))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .scrollContentBackground(.hidden)
+                        .padding(14)
+
+                    Divider().opacity(0.3)
+
+                    HStack(spacing: 0) {
+                        Button {
+                            if let s = UIPasteboard.general.string { uri = s }
+                        } label: {
+                            Label("Paste", systemImage: "doc.on.clipboard")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.wispZapColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+
+                        Divider().frame(height: 24)
+
+                        Button {
+                            showScanner = true
+                        } label: {
+                            Label("Scan QR", systemImage: "qrcode.viewfinder")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.wispZapColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+                // Hint
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 1)
+                    Text("Connection string starts with nostr+walletconnect://")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Status
+                if let status {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                        Text(status)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                // Connect button
                 Button {
                     Task { await connect() }
                 } label: {
-                    if inFlight { ProgressView() } else { Text("Connect") }
+                    Group {
+                        if inFlight {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text("Connect")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        isValidUri ? Color.wispZapColor : Color.wispSurfaceVariant,
+                        in: RoundedRectangle(cornerRadius: 14)
+                    )
                 }
-                .disabled(uri.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || inFlight)
+                .buttonStyle(.plain)
+                .disabled(!isValidUri || inFlight)
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 32)
         }
-        .navigationTitle("NWC")
-        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", action: dismiss) } }
+        .background(Color.wispBackground.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
+        }
+        .fullScreenCover(isPresented: $showScanner) {
+            QRCodeScannerView(
+                onScanned: { code in
+                    uri = code.trimmingCharacters(in: .whitespacesAndNewlines)
+                    showScanner = false
+                },
+                onCancel: { showScanner = false }
+            )
+            .ignoresSafeArea()
+        }
     }
 
     private func connect() async {

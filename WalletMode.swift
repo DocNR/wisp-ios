@@ -1,8 +1,10 @@
 import Foundation
 
-enum WalletMode: String {
+enum WalletMode: String, Identifiable {
     case nwc
     case spark
+
+    var id: String { rawValue }
 
     private static func key(for pubkey: String) -> String { "wallet_mode_\(pubkey)" }
 

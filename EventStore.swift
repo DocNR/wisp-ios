@@ -38,13 +38,21 @@ actor EventStore {
         // Skip events already on disk. Nostr events are immutable (signed),
         // so the on-disk row is authoritative; re-inserting the same event
         // is wasted work and would trigger the unique constraint.
+        //
+        // Chunk the isIn() query: ObjectBox builds the predicate as a recursive
+        // OR tree, which blows the stack at ~200+ items. 100-item chunks keep
+        // recursion depth well within limits.
         let ids = unique.map(\.id)
-        let existingIds: Set<String>
-        do {
-            let existingQuery = try box.query { EventEntity.eventId.isIn(ids) }.build()
-            existingIds = Set(try existingQuery.find().map(\.eventId))
-        } catch {
-            existingIds = []
+        var existingIds = Set<String>()
+        let chunkSize = 100
+        var chunkStart = 0
+        while chunkStart < ids.count {
+            let chunk = Array(ids[chunkStart ..< min(chunkStart + chunkSize, ids.count)])
+            if let q = try? box.query({ EventEntity.eventId.isIn(chunk) }).build(),
+               let found = try? q.find() {
+                existingIds.formUnion(found.map(\.eventId))
+            }
+            chunkStart += chunkSize
         }
 
         let toPut = existingIds.isEmpty ? unique : unique.filter { !existingIds.contains($0.id) }

@@ -13,6 +13,7 @@ struct PostCardView: View {
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
     @Environment(WalletStore.self) private var walletStore: WalletStore?
+    @Environment(AppSettings.self) private var settings
     @State private var expanded = false
     @State private var contentExpanded = false
     @State private var showReactionPicker = false
@@ -376,7 +377,7 @@ struct PostCardView: View {
                 activeSheet = .zap
             } label: {
                 actionItem(
-                    icon: "bolt.fill",
+                    image: settings.zapImage,
                     label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
                     tint: (repoBox.counts.zapSats > 0 || (engagement?.zapSats ?? 0) > 0) ? Color.wispZapColor : nil
                 )
@@ -725,9 +726,15 @@ struct PostCardView: View {
     }
 
     private func actionItem(icon: String, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {
+        actionItem(image: Image(systemName: icon), count: count, label: label, tint: tint)
+    }
+
+    private func actionItem(image: Image, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 15))
+            image
+                .resizable()
+                .scaledToFit()
+                .frame(width: 15, height: 15)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
             } else if let count, count > 0 {

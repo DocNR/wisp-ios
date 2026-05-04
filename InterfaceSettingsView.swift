@@ -193,6 +193,41 @@ struct InterfaceSettingsView: View {
                             .foregroundStyle(theme.primary)
                         }
                     }
+
+                    if !settings.fiatModeEnabled {
+                        Divider()
+                            .padding(.vertical, 4)
+                        HStack {
+                            Text("Zap icon")
+                                .foregroundStyle(theme.palette.onSurface)
+                            Spacer()
+                            HStack(spacing: 12) {
+                                Button {
+                                    settings.zapIconStyle = .bitcoin
+                                } label: {
+                                    Image(systemName: "bitcoinsign")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .foregroundStyle(settings.zapIconStyle == .bitcoin
+                                                         ? theme.primary
+                                                         : theme.palette.onSurfaceVariant.opacity(0.7))
+                                        .frame(width: 24, height: 24)
+                                }
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    settings.zapIconStyle = .bolt
+                                } label: {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .foregroundStyle(settings.zapIconStyle == .bolt
+                                                         ? theme.primary
+                                                         : theme.palette.onSurfaceVariant.opacity(0.7))
+                                        .frame(width: 24, height: 24)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
 
                 Spacer(minLength: 40)

@@ -14,58 +14,119 @@ struct SparkSetupView: View {
     enum PickerMode { case pick, create, restoreSeed, restoreRelays }
 
     var body: some View {
-        Form {
-            switch mode {
-            case .pick:
-                pickSection
-            case .create:
-                createSection
-            case .restoreSeed:
-                restoreFromSeedSection
-            case .restoreRelays:
-                restoreFromRelaysSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                content
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 32)
         }
-        .navigationTitle("Spark Wallet")
+        .background(Color.wispBackground.ignoresSafeArea())
+        .navigationTitle(mode == .pick ? "" : subModeTitle)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Close", action: dismiss) }
+            ToolbarItem(placement: .topBarTrailing) { Button("Close", action: dismiss) }
             if mode != .pick {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button { mode = .pick; restoreEntry = ""; newMnemonic = nil; store.resetRelayBackupSearch() } label: {
-                        Image(systemName: "chevron.left")
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        mode = .pick
+                        restoreEntry = ""
+                        newMnemonic = nil
+                        store.resetRelayBackupSearch()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
                     }
                 }
             }
         }
     }
 
+    private var subModeTitle: String {
+        switch mode {
+        case .pick: return "Spark Wallet"
+        case .create: return "New Wallet"
+        case .restoreSeed: return "Restore Wallet"
+        case .restoreRelays: return "Restore from Relays"
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch mode {
+        case .pick:           pickSection
+        case .create:         createSection
+        case .restoreSeed:    restoreFromSeedSection
+        case .restoreRelays:  restoreFromRelaysSection
+        }
+    }
+
+    // MARK: - Pick
+
     private var pickSection: some View {
-        Section {
-            Button { startCreate() } label: {
-                row(icon: "plus.circle.fill", title: "Create new wallet", subtitle: "Generate a fresh 12-word seed")
+        VStack(spacing: 24) {
+            // Logo header
+            VStack(spacing: 12) {
+                Image("SparkBreezLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 22)
+                Text("Self-custodial Lightning,\npowered by Spark and Breez.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            Button { mode = .restoreSeed } label: {
-                row(icon: "arrow.uturn.backward.circle.fill", title: "Restore from seed phrase", subtitle: "12 / 15 / 18 / 21 / 24 words")
-            }
-            Button { mode = .restoreRelays; Task { await store.searchRelayBackup() } } label: {
-                row(icon: "icloud.and.arrow.down.fill", title: "Restore from relays", subtitle: "Encrypted backup published from another device")
+            .frame(maxWidth: .infinity)
+
+            // Option rows
+            VStack(spacing: 12) {
+                optionRow(
+                    icon: "plus.circle.fill",
+                    title: "Create new wallet",
+                    subtitle: "Generate a fresh 12-word seed phrase",
+                    action: { startCreate() }
+                )
+                optionRow(
+                    icon: "arrow.uturn.backward.circle.fill",
+                    title: "Restore from seed phrase",
+                    subtitle: "12 words from a Spark-based wallet",
+                    action: { mode = .restoreSeed }
+                )
+                optionRow(
+                    icon: "icloud.and.arrow.down.fill",
+                    title: "Restore from relays",
+                    subtitle: "Encrypted backup from another device",
+                    action: { mode = .restoreRelays; Task { await store.searchRelayBackup() } }
+                )
             }
         }
     }
 
-    private func row(icon: String, title: String, subtitle: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 22))
-                .foregroundStyle(Color.wispZapColor)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+    private func optionRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color.wispZapColor)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
             }
-            Spacer()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
         }
-        .padding(.vertical, 4)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Create
@@ -80,120 +141,264 @@ struct SparkSetupView: View {
     }
 
     private var createSection: some View {
-        Group {
-            Section("Your recovery phrase") {
-                Text("Write these 12 words down somewhere safe. Anyone with this phrase controls your funds.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let mnemonic = newMnemonic {
-                    Text(mnemonic)
-                        .font(.system(.subheadline, design: .monospaced))
-                        .padding(8)
-                        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-                        .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 20) {
+            // Warning card
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.wispZapColor)
+                    .font(.system(size: 16))
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Write this down")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Anyone with these 12 words controls your funds. Store them somewhere safe before continuing.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            Section {
-                Button {
-                    guard let mnemonic = newMnemonic else { return }
-                    Task { await connect(with: mnemonic) }
-                } label: {
-                    if inFlight { ProgressView() } else { Text("I've backed this up — continue") }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.wispZapColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+
+            // Mnemonic display
+            if let mnemonic = newMnemonic {
+                let words = mnemonic.split(separator: " ").map(String.init)
+                let columns = [GridItem(.flexible()), GridItem(.flexible())]
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(Array(words.enumerated()), id: \.offset) { index, word in
+                        HStack(spacing: 8) {
+                            Text("\(index + 1)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 20, alignment: .trailing)
+                            Text(word)
+                                .font(.system(.subheadline, design: .monospaced).weight(.medium))
+                            Spacer(minLength: 0)
+                        }
+                    }
                 }
-                .disabled(inFlight || newMnemonic == nil)
+                .padding(16)
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+                .textSelection(.enabled)
             }
-            if let restoreError {
-                Text(restoreError).font(.caption).foregroundStyle(.red)
+
+            if let err = restoreError {
+                Text(err).font(.caption).foregroundStyle(.red)
             }
+
+            // Continue button
+            Button {
+                guard let mnemonic = newMnemonic else { return }
+                Task { await connect(with: mnemonic) }
+            } label: {
+                Group {
+                    if inFlight { ProgressView().tint(.white) } else {
+                        Text("I've backed this up — continue")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 14))
+            }
+            .disabled(inFlight || newMnemonic == nil)
+            .buttonStyle(.plain)
         }
     }
 
     // MARK: - Restore from seed
 
     private var restoreFromSeedSection: some View {
-        Group {
-            Section("Recovery phrase") {
-                TextEditor(text: $restoreEntry)
-                    .frame(minHeight: 110)
-                    .font(.system(.subheadline, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-            }
-            if let restoreError {
-                Text(restoreError).font(.caption).foregroundStyle(.red)
-            }
-            Section {
-                Button {
-                    let trimmed = restoreEntry.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let err = Bip39.validate(trimmed) {
-                        restoreError = err
-                        return
-                    }
-                    restoreError = nil
-                    Task { await connect(with: trimmed) }
-                } label: {
-                    if inFlight { ProgressView() } else { Text("Restore wallet") }
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Enter your recovery phrase, separated by spaces.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $restoreEntry)
+                .frame(minHeight: 120)
+                .font(.system(.subheadline, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .scrollContentBackground(.hidden)
+                .padding(14)
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+            if let err = restoreError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                    Text(err).font(.caption).foregroundStyle(.secondary)
                 }
-                .disabled(restoreEntry.isEmpty || inFlight)
             }
+
+            Button {
+                let trimmed = restoreEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let err = Bip39.validate(trimmed) {
+                    restoreError = err; return
+                }
+                restoreError = nil
+                Task { await connect(with: trimmed) }
+            } label: {
+                Group {
+                    if inFlight { ProgressView().tint(.white) } else {
+                        Text("Restore wallet")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    restoreEntry.isEmpty ? Color.wispSurfaceVariant : Color.wispZapColor,
+                    in: RoundedRectangle(cornerRadius: 14)
+                )
+            }
+            .disabled(restoreEntry.isEmpty || inFlight)
+            .buttonStyle(.plain)
         }
     }
 
     // MARK: - Restore from relays
 
     private var restoreFromRelaysSection: some View {
-        Group {
-            Section("Encrypted relay backup") {
-                switch store.relayBackupSearchState {
-                case .idle:
-                    Button("Search relays") { Task { await store.searchRelayBackup() } }
-                case .searching:
-                    HStack { ProgressView(); Text("Searching relays…") }
-                case .notFound:
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("No backup found on your relays.").font(.subheadline)
-                        Button("Search again") { Task { await store.searchRelayBackup() } }
-                    }
-                case .found(let entry):
-                    foundCard(entry: entry)
-                case .multiple(let entries):
-                    ForEach(entries) { entry in
-                        Button { store.selectBackupToRestore(entry) } label: {
-                            foundCard(entry: entry)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                case .error(let message):
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Search failed: \(message)").font(.subheadline).foregroundStyle(.red)
-                        Button("Retry") { Task { await store.searchRelayBackup() } }
-                    }
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Searching your write relays for an encrypted seed backup.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            relayBackupBody
+
+            if let err = restoreError {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                    Text(err).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let restoreError {
-                Text(restoreError).font(.caption).foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private var relayBackupBody: some View {
+        switch store.relayBackupSearchState {
+        case .idle:
+            primaryButton("Search relays", action: { Task { await store.searchRelayBackup() } })
+
+        case .searching:
+            HStack(spacing: 12) {
+                ProgressView()
+                Text("Searching relays…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+        case .notFound:
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    Text("No backup found on your relays.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+                Button("Search again") { Task { await store.searchRelayBackup() } }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.wispZapColor)
+            }
+
+        case .found(let entry):
+            foundCard(entry: entry)
+
+        case .multiple(let entries):
+            VStack(spacing: 12) {
+                ForEach(entries) { entry in
+                    Button { store.selectBackupToRestore(entry) } label: {
+                        foundCard(entry: entry)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+        case .error(let message):
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+
+                Button("Retry") { Task { await store.searchRelayBackup() } }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.wispZapColor)
             }
         }
     }
 
     @ViewBuilder
     private func foundCard(entry: BackupEntry) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "checkmark.seal.fill").foregroundStyle(Color.wispRepostColor)
-                Text("Backup found").font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(Color.wispRepostColor)
+                    .font(.system(size: 18))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Backup found")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Created \(relativeTime(from: entry.createdAt))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
-                if let id = entry.walletId { Text(id).font(.caption2.monospaced()).foregroundStyle(.tertiary) }
+                if let id = entry.walletId {
+                    Text(id.prefix(8) + "…")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
             }
-            Text("Created \(relativeTime(from: entry.createdAt))")
-                .font(.caption).foregroundStyle(.secondary)
+
             Button {
                 Task { await connect(with: entry.mnemonic) }
             } label: {
-                if inFlight { ProgressView() } else { Text("Restore this wallet") }
+                Group {
+                    if inFlight { ProgressView().tint(.white) } else {
+                        Text("Restore this wallet")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 10))
             }
-            .buttonStyle(.borderedProminent)
             .disabled(inFlight)
+            .buttonStyle(.plain)
         }
+        .padding(16)
+        .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    // MARK: - Helpers
+
+    private func primaryButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.wispZapColor, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Connect
