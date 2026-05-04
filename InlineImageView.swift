@@ -131,11 +131,6 @@ struct FullScreenImageView: View {
                     }
                     .scaleEffect(scale)
                     .offset(x: panOffset.width, y: panOffset.height + dismissY)
-
-                // Transparent gesture layer on top — keeps gestures in SwiftUI's
-                // touch system so UIViewRepresentable content (GIFs) can't block them.
-                Color.clear
-                    .contentShape(Rectangle())
                     .gesture(pinchGesture(in: geo))
                     .simultaneousGesture(dragGesture(in: geo))
                     .onTapGesture(count: 2) { toggleZoom() }

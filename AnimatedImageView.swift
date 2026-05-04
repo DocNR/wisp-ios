@@ -38,6 +38,7 @@ struct AnimatedImageView<Placeholder: View, Failure: View>: View {
                 AnimatedImageRenderer(payload: payload)
                     .aspectRatio(aspect ?? payload.aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)
+                    .allowsHitTesting(false)
             }
         }
         .task(id: url) {
