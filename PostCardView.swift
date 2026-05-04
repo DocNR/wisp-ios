@@ -548,7 +548,7 @@ struct PostCardView: View {
                         textStyle: .body,
                         lineLimit: 1
                     )
-                    .frame(height: 18)
+                    .frame(width: 18, height: 18)
                     if let count = engagement?.reactions, count > 0 {
                         Text(formatCount(count))
                             .font(.caption)
