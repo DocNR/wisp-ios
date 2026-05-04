@@ -479,7 +479,11 @@ final class NotificationsViewModel {
 
     private func projectDms(_ list: [DmConversation]) {
         let lastRead = dmRepo.lastReadTimestamp
-        let items: [FlatNotificationItem] = list.map { conv in
+        // Drop conversations whose latest message we sent — those aren't notifications.
+        let incoming = list.filter { conv in
+            (conv.messages.last?.senderPubkey ?? "") != keypair.pubkey
+        }
+        let items: [FlatNotificationItem] = incoming.map { conv in
             let unread = conv.messages.filter { $0.createdAt > lastRead && $0.senderPubkey != keypair.pubkey }.count
             return FlatNotificationItem(
                 id: "dm:\(conv.conversationKey)",

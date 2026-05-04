@@ -69,6 +69,11 @@ final class NotificationRepository {
         guard !activePubkey.isEmpty else { return false }
         guard insertSeen(event.id) else { return false }
 
+        // Drop the user's own actions for non-zap kinds — your own reply/quote/repost/
+        // reaction shouldn't ping you. Zaps are evaluated by the resolved zap-request
+        // pubkey inside `classifyZap`, since the receipt's `pubkey` is the LN service.
+        if event.kind != 9735 && event.pubkey == activePubkey { return false }
+
         let item: FlatNotificationItem?
         switch event.kind {
         case 1:    item = classifyKind1(event)
@@ -80,6 +85,9 @@ final class NotificationRepository {
         }
 
         guard let item else { return false }
+        // Self-zap (zapping your own note from your own wallet) — drop after
+        // classification, since `actorPubkey` is the resolved zap-request signer.
+        if item.kind == .zap && item.actorPubkey == activePubkey { return false }
         eventCache[event.id] = event
         // Insert in timestamp-desc sorted position so the FIFO eviction at the
         // tail actually drops the oldest item. A backfill burst delivers items
