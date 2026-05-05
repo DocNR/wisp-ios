@@ -162,15 +162,17 @@ final class ThreadViewModel {
         //    The ancestor walk depends on the seed but not on the root, so
         //    they don't have to serialize. Both feed events into the same
         //    `events` map; rebuildSlices fires per-ingest.
-        async let rootFetch: Void = {
-            if rootEvent == nil { await fetchRoot(from: initialRelays) }
-        }()
-        async let ancestorFetch: Void = {
-            if seedEventId != rootId {
-                await fetchAncestorChain(from: initialRelays)
-            }
-        }()
-        _ = await (rootFetch, ancestorFetch)
+        let needRoot = rootEvent == nil
+        let needAncestors = seedEventId != rootId
+        if needRoot && needAncestors {
+            async let rootFetch: Void = fetchRoot(from: initialRelays)
+            async let ancestorFetch: Void = fetchAncestorChain(from: initialRelays)
+            _ = await (rootFetch, ancestorFetch)
+        } else if needRoot {
+            await fetchRoot(from: initialRelays)
+        } else if needAncestors {
+            await fetchAncestorChain(from: initialRelays)
+        }
 
         // 5. Once the root is loaded, re-resolve relays (now using the real
         //    root author's outbox) and re-stream so the broader set catches
