@@ -12,7 +12,7 @@ final class SearchViewModel {
     // MARK: - Inputs
 
     var query: String = ""
-    var mode: Mode = .notes
+    var mode: Mode = .people
     var showAdvanced: Bool = false
 
     var relayOption: RelayOption = .default
