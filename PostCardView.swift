@@ -457,11 +457,17 @@ struct PostCardView: View {
             Button {
                 activeSheet = .replyCompose
             } label: {
-                let replyCount = forcedReplyCount ?? (repoBox.counts.replies > 0 ? repoBox.counts.replies : (engagement?.replies ?? 0))
+                // Display the highest count we know about across the three
+                // sources so cold opens get a count from the engagement
+                // network query instantly, without waiting for every reply
+                // event to stream in. `forcedReplyCount` (the in-thread
+                // visible count, blocked-author-aware) wins as more local
+                // replies arrive.
+                let networkCount = max(repoBox.counts.replies, engagement?.replies ?? 0)
+                let replyCount = max(forcedReplyCount ?? 0, networkCount)
                 actionItem(
                     icon: "bubble.right",
-                    count: replyCount > 0 ? replyCount : nil,
-                    tint: replyCount > 0 ? Color.wispPrimary : nil
+                    count: replyCount > 0 ? replyCount : nil
                 )
             }
             .buttonStyle(.plain)
