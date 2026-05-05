@@ -269,6 +269,14 @@ struct PostCardView: View {
                             onHashtagTap: onHashtagTap,
                             linksEnabled: true
                         )
+                        // `.fixedSize(vertical: true)` so inline media render
+                        // at their natural intrinsic height (parent_width ÷
+                        // aspect) instead of getting scaled down by the
+                        // parent's `maxHeight` constraint. The outer
+                        // `.frame(maxHeight:)` + `.clipped()` then crops
+                        // anything past the threshold rather than shrinking
+                        // a portrait video into an unreadable thumbnail.
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(
                             maxHeight: collapsed ? Self.longPostCollapsedHeight : .infinity,
                             alignment: .top
