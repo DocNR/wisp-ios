@@ -118,7 +118,7 @@ struct LoginView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
     }
 
     /// Avatar + name pulled from the pubkey the user is typing. Renders a
