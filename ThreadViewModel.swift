@@ -785,6 +785,10 @@ final class ThreadViewModel {
         let directReplies = events.values
             .filter { event in
                 guard event.id != seedEventId else { return false }
+                // Replies are kind-1 only. A kind-6 repost references this note
+                // via its `e` tag too, but it isn't a reply — without this
+                // guard it'd surface as a duplicate card under the focal.
+                guard event.kind == 1 else { return false }
                 return Nip10.replyTarget(of: event) == seedEventId
             }
             .sorted { $0.createdAt < $1.createdAt }
