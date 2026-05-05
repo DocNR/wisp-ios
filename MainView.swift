@@ -503,8 +503,15 @@ struct MainView: View {
                             onDmTap: { _ in
                                 selectedTab = .messages
                             },
-                            onNoteTap: { eventId in
-                                notificationsPath.append(ThreadRoute(eventId: eventId, authorPubkey: keypair.pubkey))
+                            onNoteTap: { eventId, authorHint in
+                                // Prefer the actual reply author (passed up from
+                                // the row) over keypair.pubkey — gives ThreadView
+                                // a relay set that actually has the focal +
+                                // ancestors instead of the user's own inbox.
+                                notificationsPath.append(ThreadRoute(
+                                    eventId: eventId,
+                                    authorPubkey: authorHint ?? keypair.pubkey
+                                ))
                             }
                         )
                         .navigationDestination(for: ProfileRoute.self) { route in

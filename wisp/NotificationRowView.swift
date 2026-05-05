@@ -8,7 +8,7 @@ struct NotificationRowView: View {
     let viewModel: NotificationsViewModel
     let onPeerTap: (String) -> Void
     let onDmTap: (String) -> Void
-    var onNoteTap: ((String) -> Void)? = nil
+    var onNoteTap: ((String, String?) -> Void)? = nil
 
     @State private var expanded = false
     @State private var profiles: [String: ProfileData] = [:]
@@ -132,12 +132,12 @@ struct NotificationRowView: View {
                 relayHints: [],
                 profiles: profiles,
                 onProfileTap: onPeerTap,
-                onNoteTap: onNoteTap
+                onNoteTap: { id in onNoteTap?(id, nil) }
             )
         }
         if let actorEvent = repo.event(forId: item.id) {
             Button {
-                onNoteTap?(actorEvent.id)
+                onNoteTap?(actorEvent.id, actorEvent.pubkey)
             } label: {
                 PostCardView(
                     event: actorEvent,
@@ -163,7 +163,7 @@ struct NotificationRowView: View {
         let actorId = item.actorEventId ?? item.id
         if let actor = repo.event(forId: actorId) {
             Button {
-                onNoteTap?(actor.id)
+                onNoteTap?(actor.id, actor.pubkey)
             } label: {
                 PostCardView(
                     event: actor,
@@ -183,7 +183,7 @@ struct NotificationRowView: View {
                 relayHints: item.relayHints,
                 profiles: profiles,
                 onProfileTap: onPeerTap,
-                onNoteTap: onNoteTap
+                onNoteTap: { id in onNoteTap?(id, nil) }
             )
         }
         inlineReplyList(targetId: actorId)
@@ -200,7 +200,7 @@ struct NotificationRowView: View {
     private var mentionExpansion: some View {
         if let actor = repo.event(forId: item.id) {
             Button {
-                onNoteTap?(actor.id)
+                onNoteTap?(actor.id, actor.pubkey)
             } label: {
                 PostCardView(
                     event: actor,
@@ -227,7 +227,7 @@ struct NotificationRowView: View {
                 relayHints: [],
                 profiles: profiles,
                 onProfileTap: onPeerTap,
-                onNoteTap: onNoteTap
+                onNoteTap: { id in onNoteTap?(id, nil) }
             )
         }
     }
@@ -240,7 +240,7 @@ struct NotificationRowView: View {
                 relayHints: [],
                 profiles: profiles,
                 onProfileTap: onPeerTap,
-                onNoteTap: onNoteTap
+                onNoteTap: { id in onNoteTap?(id, nil) }
             )
         }
         let msg = item.zapMessage.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -258,7 +258,7 @@ struct NotificationRowView: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(optimistic, id: \.id) { e in
                     Button {
-                        onNoteTap?(e.id)
+                        onNoteTap?(e.id, e.pubkey)
                     } label: {
                         PostCardView(
                             event: e,

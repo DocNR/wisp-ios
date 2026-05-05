@@ -141,20 +141,51 @@ final class ThreadViewModel {
         // 1. Seed from cache: fast path so the screen isn't blank.
         await seedFromCache()
 
-        // 2. Resolve the relay set we'll query for replies (root author inbox + top scored).
-        var relays = await resolveRelays()
+        // 2. Initial relay set (focal author + scored + indexer fallback when
+        //    rootEvent isn't loaded). This is the widest set we'll have until
+        //    the root resolves.
+        let initialRelays = await resolveRelays()
 
-        // 3. If we still don't have the root, fetch it (one-shot — needs to complete before
-        //    streaming so we can compute the correct rootId / author inbox).
-        if rootEvent == nil {
-            await fetchRoot(from: relays)
-            relays = await resolveRelays()
-        }
+        // 3. Open live subscriptions IMMEDIATELY so reply / ancestor events
+        //    stream in concurrently with the explicit fetches below.
+        //    Previously fetchRoot + fetchAncestorChain ran first sequentially,
+        //    blocking the live stream by up to ~12s on a cold notification
+        //    deep-link — long enough for the user to see "just the focal" and
+        //    reach for pull-to-refresh.
+        startReplyStream(relays: initialRelays)
+        startEngagementBatcher(relays: initialRelays)
+        var seedIds = Set(events.keys)
+        seedIds.insert(rootId)
+        queueEngagement(ids: seedIds)
 
-        // 4. Walk the parent chain from focal upward to fill any missing ancestors so the
-        //    user sees how they got here without waiting for the broader replies stream.
-        if seedEventId != rootId {
-            await fetchAncestorChain(from: relays)
+        // 4. Fetch root + ancestor chain in parallel against the initial set.
+        //    The ancestor walk depends on the seed but not on the root, so
+        //    they don't have to serialize. Both feed events into the same
+        //    `events` map; rebuildSlices fires per-ingest.
+        async let rootFetch: Void = {
+            if rootEvent == nil { await fetchRoot(from: initialRelays) }
+        }()
+        async let ancestorFetch: Void = {
+            if seedEventId != rootId {
+                await fetchAncestorChain(from: initialRelays)
+            }
+        }()
+        _ = await (rootFetch, ancestorFetch)
+
+        // 5. Once the root is loaded, re-resolve relays (now using the real
+        //    root author's outbox) and re-stream so the broader set catches
+        //    descendants the initial set may have missed. Saves the user
+        //    from pull-to-refresh on cold notification loads.
+        if rootEvent != nil {
+            let widerRelays = await resolveRelays()
+            if Set(widerRelays) != Set(initialRelays) {
+                cancelStreams()
+                startReplyStream(relays: widerRelays)
+                startEngagementBatcher(relays: widerRelays)
+                var ids2 = Set(events.keys)
+                ids2.insert(rootId)
+                queueEngagement(ids: ids2)
+            }
         }
 
         // Hydrate every pubkey the root note references (author + repost inner + npub
@@ -165,15 +196,6 @@ final class ThreadViewModel {
                 else { queueProfileFetch(pk) }
             }
         }
-
-        // 5. Open live subscriptions for replies + engagement and let the UI update as events
-        //    arrive. The relay race is what makes the thread feel instant.
-        startReplyStream(relays: relays)
-        startEngagementBatcher(relays: relays)
-        // Seed the engagement subscription with the root + everything we already have from cache.
-        var seedIds = Set(events.keys)
-        seedIds.insert(rootId)
-        queueEngagement(ids: seedIds)
     }
 
     func refresh() async {
@@ -462,6 +484,19 @@ final class ThreadViewModel {
         if let board = RelayScoreBoard.load(pubkey: keypair.pubkey) {
             for relay in board.scoredRelays.prefix(5) where seen.insert(relay.url).inserted {
                 ordered.append(relay.url)
+            }
+        }
+
+        // Cold-load safety net: when we don't yet have the root, the
+        // outbox set built above is just `authorHint`'s read relays —
+        // for a notification deep-link that's the user's own inbox,
+        // which usually doesn't carry the thread root or its ancestors.
+        // Indexer relays catch most events and let fetchRoot resolve so
+        // the second resolveRelays() pass can use the real root author's
+        // outbox set.
+        if rootEvent == nil {
+            for url in Self.indexerRelays where seen.insert(url).inserted {
+                ordered.append(url)
             }
         }
 
