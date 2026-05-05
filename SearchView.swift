@@ -33,62 +33,69 @@ struct SearchView: View {
     // MARK: - Top bar
 
     private var topBar: some View {
-        HStack(spacing: 8) {
-            if !queryFocused {
+        VStack(spacing: 8) {
+            // Mode toggle above the search field so the search input
+            // claims the full row width — the previous side-by-side
+            // layout left the field cramped after both segments + the
+            // filters icon ate ~60% of the bar.
+            HStack {
                 modePill
+                Spacer(minLength: 0)
             }
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
 
-                TextField("Search", text: Binding(
-                    get: { viewModel.query },
-                    set: { viewModel.updateQuery($0) }
-                ))
-                .focused($queryFocused)
-                .submitLabel(.search)
-                .onSubmit { viewModel.runSearch() }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.subheadline)
+                    TextField("Search", text: Binding(
+                        get: { viewModel.query },
+                        set: { viewModel.updateQuery($0) }
+                    ))
+                    .focused($queryFocused)
+                    .submitLabel(.search)
+                    .onSubmit { viewModel.runSearch() }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.subheadline)
 
-                if !viewModel.query.isEmpty {
-                    Button {
+                    if !viewModel.query.isEmpty {
+                        Button {
+                            viewModel.updateQuery("")
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
+
+                if queryFocused {
+                    // Standard iOS search-cancel affordance: appears only
+                    // when the field is focused, dismisses the keyboard.
+                    Button("Cancel") {
+                        queryFocused = false
                         viewModel.updateQuery("")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(Color.wispPrimary)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                } else {
+                    Button {
+                        viewModel.showAdvanced.toggle()
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 18))
+                            .foregroundStyle(viewModel.showAdvanced ? Color.wispPrimary : .secondary)
+                            .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
                 }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
-
-            if queryFocused {
-                // Standard iOS search-cancel affordance: appears only when
-                // the field is focused, dismisses the keyboard, and (if the
-                // query is empty) collapses any focus-only state.
-                Button("Cancel") {
-                    queryFocused = false
-                }
-                .font(.subheadline)
-                .foregroundStyle(Color.wispPrimary)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            } else {
-                Button {
-                    viewModel.showAdvanced.toggle()
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18))
-                        .foregroundStyle(viewModel.showAdvanced ? Color.wispPrimary : .secondary)
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 12)
@@ -96,30 +103,38 @@ struct SearchView: View {
         .animation(.easeInOut(duration: 0.2), value: queryFocused)
     }
 
+    /// Two-segment toggle for the search mode. Both options are always
+    /// visible — replaces the previous Menu-style pill that hid the
+    /// non-active mode behind a dropdown.
     private var modePill: some View {
-        Menu {
-            Button {
-                viewModel.setMode(.notes)
-            } label: {
-                Label("Notes", systemImage: "text.bubble")
-            }
-            Button {
-                viewModel.setMode(.people)
-            } label: {
-                Label("People", systemImage: "person.crop.circle")
-            }
+        HStack(spacing: 4) {
+            modeChip(.people, icon: "person.crop.circle", label: "People")
+            modeChip(.notes,  icon: "text.bubble",        label: "Notes")
+        }
+        .padding(3)
+        .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func modeChip(_ mode: SearchViewModel.Mode, icon: String, label: String) -> some View {
+        let selected = viewModel.mode == mode
+        return Button {
+            viewModel.setMode(mode)
         } label: {
             HStack(spacing: 4) {
-                Text(viewModel.mode == .notes ? "Notes" : "People")
-                    .font(.subheadline.weight(.semibold))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(label)
+                    .font(.caption.weight(.semibold))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.wispSurfaceVariant, in: RoundedRectangle(cornerRadius: 20))
-            .foregroundStyle(Color.wispOnSurface)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(selected ? Color.wispPrimary : Color.clear)
+            )
+            .foregroundStyle(selected ? Color.white : Color.wispOnSurface)
         }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Advanced panel

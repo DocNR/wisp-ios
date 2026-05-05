@@ -23,7 +23,7 @@ struct OnboardingView: View {
                 .tag(2)
             ZapStep(onNext: { withAnimation { currentPage = 4 } })
                 .tag(3)
-            WaitingStep(viewModel: viewModel, onComplete: onComplete)
+            WaitingStep(viewModel: viewModel, keypair: keypair, onComplete: onComplete)
                 .tag(4)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
@@ -185,10 +185,18 @@ private struct ZapStep: View {
 
 private struct WaitingStep: View {
     var viewModel: OnboardingViewModel
+    let keypair: Keypair
     var onComplete: () -> Void
 
     @State private var messageIndex = 0
     @State private var rotation: Double = 0
+    @State private var profile: ProfileData?
+
+    /// Spinner ring sized to match the success checkmark so the
+    /// transition reads as the same widget swapping its content,
+    /// and the avatar inside has room to read at a glance.
+    private let spinnerSize: CGFloat = 64
+    private let avatarSize: CGFloat = 52
 
     var body: some View {
         VStack(spacing: 24) {
@@ -198,15 +206,19 @@ private struct WaitingStep: View {
                 Image(systemName: "checkmark.circle.fill")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 64, height: 64)
+                    .frame(width: spinnerSize, height: spinnerSize)
                     .foregroundStyle(.green)
                     .transition(.scale.combined(with: .opacity))
             } else {
-                Circle()
-                    .trim(from: 0, to: 0.7)
-                    .stroke(Color.wispPrimary, lineWidth: 4)
-                    .frame(width: 48, height: 48)
-                    .rotationEffect(.degrees(rotation))
+                ZStack {
+                    CachedAvatarView(url: profile?.picture, size: avatarSize)
+                    Circle()
+                        .trim(from: 0, to: 0.7)
+                        .stroke(Color.wispPrimary, lineWidth: 4)
+                        .frame(width: spinnerSize, height: spinnerSize)
+                        .rotationEffect(.degrees(rotation))
+                }
+                .frame(width: spinnerSize, height: spinnerSize)
             }
 
             if viewModel.isReady {
@@ -250,6 +262,7 @@ private struct WaitingStep: View {
             withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
                 rotation = 360
             }
+            profile = ProfileRepository.shared.get(keypair.pubkey)
             Task {
                 while !viewModel.isReady {
                     try? await Task.sleep(for: .seconds(2.5))

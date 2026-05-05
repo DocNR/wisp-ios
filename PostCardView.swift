@@ -73,6 +73,26 @@ struct PostCardView: View {
     private static let longPostCharThreshold = 600
     private static let longPostCollapsedHeight: CGFloat = 280
 
+    /// Treat a post as "long" when it has at least one image / video whose
+    /// NIP-92 imeta `dim` is taller than wide — those render at intrinsic
+    /// height inside the card and dominate the feed otherwise (a single
+    /// portrait screenshot can scroll for screenfuls). Landscape media
+    /// stays uncollapsed since it sits within a normal card height.
+    static func eventHasTallMedia(_ event: NostrEvent) -> Bool {
+        for tag in event.tags where tag.first == "imeta" {
+            for entry in tag.dropFirst() where entry.hasPrefix("dim ") {
+                let dim = entry.dropFirst(4)
+                let parts = dim.split(separator: "x", maxSplits: 1)
+                guard parts.count == 2,
+                      let w = Double(parts[0]),
+                      let h = Double(parts[1]),
+                      w > 0 else { continue }
+                if h / w >= 1.0 { return true }
+            }
+        }
+        return false
+    }
+
     private struct ActionAlert: Identifiable {
         let id = UUID()
         let title: String
@@ -102,6 +122,11 @@ struct PostCardView: View {
         guard let me = myPubkey else { return false }
         if repoBox.counts.reposters.contains(me) { return true }
         return engagement?.reposters.contains(me) == true
+    }
+    private var iZapped: Bool {
+        guard let me = myPubkey else { return false }
+        if repoBox.counts.zappers.contains(where: { $0.pubkey == me }) { return true }
+        return engagement?.zappers.contains(where: { $0.pubkey == me }) == true
     }
 
     /// Engagement counts merged across the parent-passed `engagement` and the
@@ -232,6 +257,7 @@ struct PostCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !displayEvent.content.isEmpty || !displayEvent.tags.isEmpty {
                     let isLong = displayEvent.content.count > Self.longPostCharThreshold
+                                 || Self.eventHasTallMedia(displayEvent)
                     let collapsed = isLong && !contentExpanded
                     VStack(alignment: .leading, spacing: 6) {
                         RichContentView(
@@ -303,6 +329,7 @@ struct PostCardView: View {
                         reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
                         relays: combinedRelays(for: displayEvent.id),
                         tags: displayEvent.tags,
+                        createdAt: displayEvent.createdAt,
                         profiles: profiles,
                         onProfileTap: onProfileTap
                     )
@@ -441,7 +468,7 @@ struct PostCardView: View {
                 actionItem(
                     image: settings.zapImage,
                     label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
-                    tint: (repoBox.counts.zapSats > 0 || (engagement?.zapSats ?? 0) > 0) ? Color.wispZapColor : nil
+                    tint: iZapped ? Color.wispZapColor : nil
                 )
             }
             .buttonStyle(.plain)
@@ -476,7 +503,7 @@ struct PostCardView: View {
 
     private var repostAction: some View {
         let count = resolvedRepostCount
-        let tint: Color? = iReposted ? Color.wispRepostColor : (count > 0 ? Color.wispRepostColor : nil)
+        let tint: Color? = iReposted ? Color.wispRepostColor : nil
         return Menu {
             Button {
                 sendRepost()
@@ -787,16 +814,35 @@ struct PostCardView: View {
         return ordered.sorted { ($0.lowercased()) < ($1.lowercased()) }
     }
 
+    /// SF Symbol action item. Sizes via `.font(.system(size:))` so each
+    /// symbol picks its natural visual weight — `arrow.2.squarepath` and
+    /// other wider glyphs were rendering visibly smaller under the prior
+    /// `.resizable().scaledToFit().frame(15x15)` because scaledToFit shrunk
+    /// the height to keep the aspect ratio.
     private func actionItem(icon: String, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {
-        actionItem(image: Image(systemName: icon), count: count, label: label, tint: tint)
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 17))
+                .frame(width: 22, height: 17, alignment: .center)
+            if let label, !label.isEmpty {
+                Text(label).font(.caption)
+            } else if let count, count > 0 {
+                Text(formatCount(count)).font(.caption)
+            }
+        }
+        .foregroundStyle(tint ?? .secondary)
+        .frame(height: 28)
     }
 
+    /// Bitmap-image action item (zap glyph swap, custom emoji reactions).
+    /// Keeps the resize/frame path because asset / emoji images don't
+    /// participate in the SF Symbol weight system.
     private func actionItem(image: Image, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {
         HStack(spacing: 4) {
             image
                 .resizable()
                 .scaledToFit()
-                .frame(width: 15, height: 15)
+                .frame(width: 18, height: 18)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
             } else if let count, count > 0 {
@@ -940,6 +986,7 @@ private struct NoteDetailsPanel: View {
     let reposters: [String]
     let relays: [String]
     let tags: [[String]]
+    let createdAt: Int
     let profiles: [String: ProfileData]
     let onProfileTap: ((String) -> Void)?
 
@@ -967,6 +1014,7 @@ private struct NoteDetailsPanel: View {
             if !relays.isEmpty {
                 seenOnSection
             }
+            postedAtSection
             if let name = clientName {
                 postedViaSection(name: name)
             }
@@ -1101,6 +1149,17 @@ private struct NoteDetailsPanel: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Text("Posted via \(name)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var postedAtSection: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(absoluteTimestamp(createdAt))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

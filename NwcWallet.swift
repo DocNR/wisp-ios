@@ -10,6 +10,15 @@ final class NwcWallet: Wallet {
 
     private(set) var balanceMsats: Int64?
     private(set) var isConnected: Bool = false
+    /// Node alias as advertised by the connected wallet service via NIP-47
+    /// `get_info`. Lazily populated after `connect()`; nil until the first
+    /// successful fetch and reset on disconnect. Cached to UserDefaults so
+    /// cold launches surface the last-known alias immediately.
+    private(set) var nodeAlias: String?
+    /// Method names the wallet service advertised in its last `get_info`
+    /// response — e.g. `["pay_invoice", "make_invoice", "get_balance"]`.
+    /// Empty until the round-trip lands. Cached to UserDefaults too.
+    private(set) var supportedMethods: [String] = []
 
     let statusLog: AsyncStream<String>
     let paymentReceived: AsyncStream<Int64>
@@ -25,6 +34,8 @@ final class NwcWallet: Wallet {
 
     init(pubkey: String) {
         self.pubkey = pubkey
+        self.nodeAlias = UserDefaults.standard.string(forKey: Self.aliasCacheKey(pubkey: pubkey))
+        self.supportedMethods = UserDefaults.standard.stringArray(forKey: Self.methodsCacheKey(pubkey: pubkey)) ?? []
         var sCont: AsyncStream<String>.Continuation!
         self.statusLog = AsyncStream { c in sCont = c }
         self.statusContinuation = sCont
@@ -35,6 +46,9 @@ final class NwcWallet: Wallet {
         self.balanceUpdates = AsyncStream { c in bCont = c }
         self.balanceContinuation = bCont
     }
+
+    private static func aliasCacheKey(pubkey: String) -> String { "nwc_node_alias_\(pubkey)" }
+    private static func methodsCacheKey(pubkey: String) -> String { "nwc_methods_\(pubkey)" }
 
     func hasConnection() -> Bool {
         WalletKeychain.loadNwcUri(for: pubkey) != nil
@@ -52,7 +66,37 @@ final class NwcWallet: Wallet {
 
     func clearConnection() {
         WalletKeychain.deleteNwcUri(for: pubkey)
+        UserDefaults.standard.removeObject(forKey: Self.aliasCacheKey(pubkey: pubkey))
+        UserDefaults.standard.removeObject(forKey: Self.methodsCacheKey(pubkey: pubkey))
+        nodeAlias = nil
+        supportedMethods = []
         disconnect()
+    }
+
+    /// Fire a NIP-47 `get_info` request to the connected wallet service and
+    /// cache the returned alias + supported methods. No-op when not
+    /// connected. Errors fall through silently — the UI just keeps the
+    /// last-known cached values until the next successful round-trip.
+    func fetchNodeAlias() async {
+        guard isConnected else { return }
+        let result = await send(.getInfo) { response -> (String?, [String]) in
+            guard case .getInfo(let alias, let methods, _) = response else {
+                throw WalletError.decodeFailed("expected get_info response")
+            }
+            let trimmedAlias = alias?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanAlias = (trimmedAlias?.isEmpty ?? true) ? nil : trimmedAlias
+            return (cleanAlias, methods)
+        }
+        if case .success(let (alias, methods)) = result {
+            if let alias {
+                nodeAlias = alias
+                UserDefaults.standard.set(alias, forKey: Self.aliasCacheKey(pubkey: pubkey))
+            }
+            if !methods.isEmpty {
+                supportedMethods = methods
+                UserDefaults.standard.set(methods, forKey: Self.methodsCacheKey(pubkey: pubkey))
+            }
+        }
     }
 
     func connect() async {

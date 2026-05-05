@@ -197,10 +197,20 @@ struct WalletView: View {
                 .scaledToFit()
                 .frame(height: 18)
         } else {
-            Image("NwcLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(height: 30)
+            HStack(spacing: 8) {
+                Image("NwcLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 30)
+                if let alias = store.nwcNodeAlias, !alias.isEmpty {
+                    Text(alias)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.wispOnSurface)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: 180, alignment: .leading)
+                }
+            }
         }
     }
 
