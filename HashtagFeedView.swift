@@ -7,6 +7,8 @@ import SwiftUI
 struct HashtagFeedView: View {
     let keypair: Keypair
     let source: HashtagFeedViewModel.Source
+    var onProfileTap: (String) -> Void = { _ in }
+    var onNoteTap: (String) -> Void = { _ in }
     var onHashtagTap: (String) -> Void = { _ in }
 
     @State private var viewModel: HashtagFeedViewModel
@@ -17,10 +19,14 @@ struct HashtagFeedView: View {
     init(
         keypair: Keypair,
         source: HashtagFeedViewModel.Source,
+        onProfileTap: @escaping (String) -> Void = { _ in },
+        onNoteTap: @escaping (String) -> Void = { _ in },
         onHashtagTap: @escaping (String) -> Void = { _ in }
     ) {
         self.keypair = keypair
         self.source = source
+        self.onProfileTap = onProfileTap
+        self.onNoteTap = onNoteTap
         self.onHashtagTap = onHashtagTap
         _viewModel = State(initialValue: HashtagFeedViewModel(keypair: keypair, source: source))
     }
@@ -116,11 +122,9 @@ struct HashtagFeedView: View {
                                 profile: viewModel.profiles[event.pubkey],
                                 profiles: viewModel.profiles,
                                 engagement: nil,
-                                onProfileTap: { _ in },
-                                onNoteTap: { _ in },
-                                onHashtagTap: { tag in
-                                    onHashtagTap(tag)
-                                }
+                                onProfileTap: { pubkey in onProfileTap(pubkey) },
+                                onNoteTap: { eventId in onNoteTap(eventId) },
+                                onHashtagTap: { tag in onHashtagTap(tag) }
                             )
                         }
                         .buttonStyle(.plain)
