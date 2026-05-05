@@ -10,6 +10,11 @@ final class NwcWallet: Wallet {
 
     private(set) var balanceMsats: Int64?
     private(set) var isConnected: Bool = false
+    /// Node alias as advertised by the connected wallet service via NIP-47
+    /// `get_info`. Lazily populated after `connect()`; nil until the first
+    /// successful fetch and reset on disconnect. Cached to UserDefaults so
+    /// cold launches surface the last-known alias immediately.
+    private(set) var nodeAlias: String?
 
     let statusLog: AsyncStream<String>
     let paymentReceived: AsyncStream<Int64>
@@ -25,6 +30,7 @@ final class NwcWallet: Wallet {
 
     init(pubkey: String) {
         self.pubkey = pubkey
+        self.nodeAlias = UserDefaults.standard.string(forKey: Self.aliasCacheKey(pubkey: pubkey))
         var sCont: AsyncStream<String>.Continuation!
         self.statusLog = AsyncStream { c in sCont = c }
         self.statusContinuation = sCont
@@ -35,6 +41,8 @@ final class NwcWallet: Wallet {
         self.balanceUpdates = AsyncStream { c in bCont = c }
         self.balanceContinuation = bCont
     }
+
+    private static func aliasCacheKey(pubkey: String) -> String { "nwc_node_alias_\(pubkey)" }
 
     func hasConnection() -> Bool {
         WalletKeychain.loadNwcUri(for: pubkey) != nil
@@ -52,7 +60,28 @@ final class NwcWallet: Wallet {
 
     func clearConnection() {
         WalletKeychain.deleteNwcUri(for: pubkey)
+        UserDefaults.standard.removeObject(forKey: Self.aliasCacheKey(pubkey: pubkey))
+        nodeAlias = nil
         disconnect()
+    }
+
+    /// Fire a NIP-47 `get_info` request to the connected wallet service and
+    /// cache the returned alias. No-op when not connected. Errors and
+    /// missing-alias responses are silently ignored — the UI just keeps
+    /// showing nothing extra next to the NWC logo.
+    func fetchNodeAlias() async {
+        guard isConnected else { return }
+        let result = await send(.getInfo) { response -> String? in
+            guard case .getInfo(let alias, _, _) = response else {
+                throw WalletError.decodeFailed("expected get_info response")
+            }
+            let trimmed = alias?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (trimmed?.isEmpty ?? true) ? nil : trimmed
+        }
+        if case .success(let alias?) = result {
+            nodeAlias = alias
+            UserDefaults.standard.set(alias, forKey: Self.aliasCacheKey(pubkey: pubkey))
+        }
     }
 
     func connect() async {

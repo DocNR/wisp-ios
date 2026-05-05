@@ -53,6 +53,7 @@ struct WalletSettingsView: View {
     @State private var showDisconnectAlert = false
     @State private var showDeleteAlert = false
     @State private var showRemoveAddressAlert = false
+    @State private var showNwcDetails = false
     @AppStorage private var balanceHidden: Bool
     @AppStorage("walletBalanceUnit") private var balanceUnitRaw: String = WalletBalanceUnit.sats.rawValue
 
@@ -75,12 +76,16 @@ struct WalletSettingsView: View {
                 if store.mode == .spark {
                     lightningAddressSection
                 }
+                if store.mode == .nwc {
+                    nwcConnectionSection
+                }
                 displaySection
                 if store.mode == .spark {
                     securitySection
                 }
                 disclaimerCard
                 dangerSection
+                poweredByFooter
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -215,6 +220,105 @@ struct WalletSettingsView: View {
                     .padding(.bottom, 10)
             }
         }
+    }
+
+    // MARK: - NWC connection (NWC only)
+
+    private var nwcConnectionSection: some View {
+        settingsGroup(header: "Wallet Connection") {
+            // Tappable header row: NWC logo + node alias + chevron.
+            // Tap toggles the details panel below.
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showNwcDetails.toggle() }
+            } label: {
+                HStack(spacing: 12) {
+                    Image("NwcLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 28, height: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text((store.nwcNodeAlias?.isEmpty == false ? store.nwcNodeAlias : nil) ?? "NWC wallet")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let lud = store.lightningAddress, !lud.isEmpty {
+                            Text(lud)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: showNwcDetails ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showNwcDetails, let conn = store.nwcConnectionDetails {
+                Divider().opacity(0.25).padding(.leading, 16)
+                nwcDetailsList(conn)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func nwcDetailsList(_ conn: NwcConnection) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            nwcDetailRow(
+                label: "Service pubkey",
+                value: nwcShortNpub(hex: Hex.encode(Data(conn.walletServicePubkey)))
+            )
+            Divider().opacity(0.25).padding(.leading, 16)
+            nwcDetailRow(
+                label: conn.relays.count == 1 ? "Relay" : "Relays",
+                value: conn.relays.joined(separator: "\n"),
+                multiline: true
+            )
+            Divider().opacity(0.25).padding(.leading, 16)
+            nwcDetailRow(
+                label: "Encryption",
+                value: conn.encryption == .nip44 ? "NIP-44" : "NIP-04"
+            )
+            if let lud = conn.lud16, !lud.isEmpty {
+                Divider().opacity(0.25).padding(.leading, 16)
+                nwcDetailRow(label: "Lightning address", value: lud)
+            }
+        }
+    }
+
+    private func nwcDetailRow(label: String, value: String, multiline: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(multiline ? nil : 1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    /// Inlined npub-short helper. Mirrors the one introduced on PR #63;
+    /// kept local so this branch doesn't depend on it.
+    private func nwcShortNpub(hex: String) -> String {
+        guard let data = Hex.decode(hex), data.count == 32,
+              let full = Nip19.npubEncode(pubkey: Array(data)) else {
+            return String(hex.prefix(8)) + "\u{2026}"
+        }
+        return "\(full.prefix(9))\u{2026}\(full.suffix(4))"
     }
 
     // MARK: - Display
@@ -450,6 +554,35 @@ struct WalletSettingsView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, 4)
         }
+    }
+
+    // MARK: - Powered-by footer
+
+    @ViewBuilder
+    private var poweredByFooter: some View {
+        VStack(spacing: 6) {
+            if store.mode == .nwc {
+                HStack(spacing: 8) {
+                    Image("NwcLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 22)
+                    Text("Nostr Wallet Connect")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            } else if store.mode == .spark {
+                Image("SparkBreezLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 18)
+                Text("Powered by Breez SDK v\(BreezConfig.sdkVersion)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 24)
     }
 
     // MARK: - Helper

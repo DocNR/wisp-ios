@@ -18,6 +18,10 @@ final class WalletStore {
     private(set) var relayBackupSearchState: BackupSearchState = .idle
     private(set) var relayBackupPublishState: BackupPublishState = .idle
     private(set) var lightningAddress: String?
+    /// NIP-47 wallet service alias, e.g. the LSP / hub node name. Surfaced
+    /// next to the NWC logo when set. Nil for Spark or before the first
+    /// `get_info` round-trip lands.
+    private(set) var nwcNodeAlias: String?
 
     private var wallet: Wallet?
     private var statusTask: Task<Void, Never>?
@@ -97,6 +101,7 @@ final class WalletStore {
         balanceMsats = nil
         transactions = []
         lightningAddress = nil
+        nwcNodeAlias = nil
         relayBackupSearchState = .idle
         relayBackupPublishState = .idle
     }
@@ -113,6 +118,7 @@ final class WalletStore {
         self.balanceMsats = WalletCache.loadBalance(for: keypair.pubkey)
         self.transactions = WalletCache.loadTransactions(for: keypair.pubkey)
         self.lightningAddress = Self.cachedLightningAddress(for: keypair.pubkey)
+        self.nwcNodeAlias = nil
     }
 
     /// Synchronously extracts a lightning address from stored credentials without a network
@@ -125,6 +131,16 @@ final class WalletStore {
         return conn.lud16
     }
 
+    /// Read-only view of the active NWC connection details for the
+    /// settings screen. Nil when not in NWC mode or when the URI isn't
+    /// parseable. Pulled fresh from the keychain on each call so settings
+    /// reflects the current state after a re-connect.
+    var nwcConnectionDetails: NwcConnection? {
+        guard mode == .nwc,
+              let uri = WalletKeychain.loadNwcUri(for: keypair.pubkey) else { return nil }
+        return NwcConnection.parse(uri)
+    }
+
     /// Try to bring up whatever wallet the user previously configured. Safe to call repeatedly.
     /// On a re-call after wallet is already wired up, just refresh balance + transactions
     /// in the background so the user sees fresh data on tab open.
@@ -133,10 +149,12 @@ final class WalletStore {
         if wallet == nil {
             try? await switchToMode(mode)
             await refreshLightningAddress()
+            await refreshNwcNodeAlias()
         } else if isConnected {
             _ = await fetchBalance()
             await refreshTransactions()
             await refreshLightningAddress()
+            await refreshNwcNodeAlias()
         }
     }
 
@@ -146,6 +164,19 @@ final class WalletStore {
         } else if let nwc = wallet as? NwcWallet {
             lightningAddress = nwc.lud16
         }
+    }
+
+    /// Fetch the NWC wallet service's node alias via NIP-47 `get_info`.
+    /// Surfaces immediately from the cache, then upgrades to the live value
+    /// when the round-trip lands. No-op for Spark.
+    func refreshNwcNodeAlias() async {
+        guard let nwc = wallet as? NwcWallet else {
+            nwcNodeAlias = nil
+            return
+        }
+        nwcNodeAlias = nwc.nodeAlias
+        await nwc.fetchNodeAlias()
+        nwcNodeAlias = nwc.nodeAlias
     }
 
     func checkLightningAddressAvailable(username: String) async -> Bool {
@@ -188,6 +219,7 @@ final class WalletStore {
             Task { _ = await self.fetchBalance() }
             Task { await self.refreshTransactions() }
             Task { await self.refreshLightningAddress() }
+            Task { await self.refreshNwcNodeAlias() }
         }
         return newWallet.isConnected
     }

@@ -10,4 +10,10 @@ enum BreezConfig {
     }()
 
     static var hasApiKey: Bool { !apiKey.isEmpty }
+
+    /// Pinned Breez Spark SDK version, mirrored from
+    /// `wisp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`.
+    /// Update this string whenever the SDK is bumped — there's no runtime
+    /// version constant exposed by the Swift bindings to read instead.
+    static let sdkVersion = "0.13.1"
 }
