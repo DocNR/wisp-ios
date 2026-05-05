@@ -120,11 +120,18 @@ struct NotificationRowView: View {
         .padding(.top, 10)
     }
 
-    /// Standard avatar-aligned indent for caption text + composer + inline-
-    /// reply blocks inside the expansion. PostCardViews intentionally skip
+    /// Standard avatar-aligned indent for caption text + inline-reply
+    /// blocks inside the expansion. PostCardViews intentionally skip
     /// this — they render at the row's full content width so MediaGridView
     /// (which keys its layout off the screen edge) doesn't overflow.
     private static let captionLeadingIndent: CGFloat = 12 + 42
+
+    /// Composer pill aligns with PostCardView's content edge (which sits
+    /// at +16 from the screen via the card's internal padding). 2 here
+    /// + the composer's own 14pt internal padding = 16pt visual offset,
+    /// so the pill ends matching the post text width above it instead of
+    /// being indented under the avatar like caption snippets.
+    private static let composerSidePadding: CGFloat = 2
 
     @ViewBuilder
     private var replyExpansion: some View {
@@ -163,8 +170,7 @@ struct NotificationRowView: View {
                 sending: $sendingReply,
                 viewModel: viewModel
             )
-            .padding(.leading, Self.captionLeadingIndent)
-            .padding(.trailing, 12)
+            .padding(.horizontal, Self.composerSidePadding)
         }
     }
 
@@ -206,8 +212,7 @@ struct NotificationRowView: View {
                 sending: $sendingReply,
                 viewModel: viewModel
             )
-            .padding(.leading, Self.captionLeadingIndent)
-            .padding(.trailing, 12)
+            .padding(.horizontal, Self.composerSidePadding)
         }
     }
 
@@ -230,8 +235,7 @@ struct NotificationRowView: View {
                 sending: $sendingReply,
                 viewModel: viewModel
             )
-            .padding(.leading, Self.captionLeadingIndent)
-            .padding(.trailing, 12)
+            .padding(.horizontal, Self.composerSidePadding)
         }
     }
 
