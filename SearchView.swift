@@ -358,11 +358,15 @@ struct SearchView: View {
                     profile: viewModel.noteProfiles[event.pubkey] ?? ProfileRepository.shared.get(event.pubkey),
                     profiles: viewModel.noteProfiles,
                     engagement: viewModel.engagement[event.id],
-                    onProfileTap: { _ in },
+                    onProfileTap: { pubkey in
+                        path.append(ProfileRoute(pubkey: pubkey))
+                    },
                     onNoteTap: { eventId in
                         path.append(ThreadRoute(eventId: eventId, authorPubkey: event.pubkey))
                     },
-                    onHashtagTap: { _ in }
+                    onHashtagTap: { tag in
+                        path.append(HashtagFeedRoute(tag: tag))
+                    }
                 )
             }
             .buttonStyle(.plain)
