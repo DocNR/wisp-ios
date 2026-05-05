@@ -329,6 +329,7 @@ struct PostCardView: View {
                         reposters: repoBox.counts.reposters.isEmpty ? (engagement?.reposters ?? []) : repoBox.counts.reposters,
                         relays: combinedRelays(for: displayEvent.id),
                         tags: displayEvent.tags,
+                        createdAt: displayEvent.createdAt,
                         profiles: profiles,
                         onProfileTap: onProfileTap
                     )
@@ -985,6 +986,7 @@ private struct NoteDetailsPanel: View {
     let reposters: [String]
     let relays: [String]
     let tags: [[String]]
+    let createdAt: Int
     let profiles: [String: ProfileData]
     let onProfileTap: ((String) -> Void)?
 
@@ -1012,6 +1014,7 @@ private struct NoteDetailsPanel: View {
             if !relays.isEmpty {
                 seenOnSection
             }
+            postedAtSection
             if let name = clientName {
                 postedViaSection(name: name)
             }
@@ -1146,6 +1149,17 @@ private struct NoteDetailsPanel: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Text("Posted via \(name)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var postedAtSection: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(absoluteTimestamp(createdAt))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

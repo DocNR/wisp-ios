@@ -223,7 +223,6 @@ struct ThreadView: View {
                     profile: viewModel.profiles[row.event.pubkey],
                     profiles: viewModel.profiles,
                     engagement: engagement(for: row.event.id),
-                    useAbsoluteTimestamp: true,
                     forcedReplyCount: viewModel.visibleRepliesCount,
                     onProfileTap: { _ in },
                     // Tapping a quoted note inside the focal pushes that
