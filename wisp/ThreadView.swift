@@ -224,13 +224,13 @@ struct ThreadView: View {
                     profiles: viewModel.profiles,
                     engagement: engagement(for: row.event.id),
                     forcedReplyCount: viewModel.visibleRepliesCount,
-                    onProfileTap: { _ in },
+                    onProfileTap: { pk in path.append(ProfileRoute(pubkey: pk)) },
                     // Tapping a quoted note inside the focal pushes that
                     // note as its own focal, same as tapping a reply row.
                     onNoteTap: { quotedId in
                         navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
                     },
-                    onHashtagTap: { _ in }
+                    onHashtagTap: { tag in path.append(HashtagFeedRoute(tag: tag)) }
                 )
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
