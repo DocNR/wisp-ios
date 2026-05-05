@@ -20,13 +20,13 @@ struct NotificationRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             collapsedRow
+                .padding(.horizontal, 12)
                 .contentShape(Rectangle())
                 .onTapGesture { handleTap() }
 
             if expanded { expandedContent }
         }
         .padding(.vertical, 10)
-        .padding(.horizontal, 12)
         .background(rowBackground)
         .task(id: item.id) { await hydrateProfiles() }
     }
@@ -118,22 +118,31 @@ struct NotificationRowView: View {
             }
         }
         .padding(.top, 10)
-        .padding(.leading, 42)
     }
+
+    /// Standard avatar-aligned indent for caption text + composer + inline-
+    /// reply blocks inside the expansion. PostCardViews intentionally skip
+    /// this — they render at the row's full content width so MediaGridView
+    /// (which keys its layout off the screen edge) doesn't overflow.
+    private static let captionLeadingIndent: CGFloat = 12 + 42
 
     @ViewBuilder
     private var replyExpansion: some View {
         if !item.referencedEventId.isEmpty {
-            Text("replying to your note")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            QuotedNoteView(
-                eventId: item.referencedEventId,
-                relayHints: [],
-                profiles: profiles,
-                onProfileTap: onPeerTap,
-                onNoteTap: { id in onNoteTap?(id, nil) }
-            )
+            VStack(alignment: .leading, spacing: 6) {
+                Text("replying to your note")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                QuotedNoteView(
+                    eventId: item.referencedEventId,
+                    relayHints: [],
+                    profiles: profiles,
+                    onProfileTap: onPeerTap,
+                    onNoteTap: { id in onNoteTap?(id, nil) }
+                )
+            }
+            .padding(.leading, Self.captionLeadingIndent)
+            .padding(.trailing, 12)
         }
         if let actorEvent = repo.event(forId: item.id) {
             Button {
@@ -144,7 +153,6 @@ struct NotificationRowView: View {
                     profile: profiles[actorEvent.pubkey],
                     profiles: profiles
                 )
-                .padding(.horizontal, -12)
             }
             .buttonStyle(.plain)
         }
@@ -155,6 +163,8 @@ struct NotificationRowView: View {
                 sending: $sendingReply,
                 viewModel: viewModel
             )
+            .padding(.leading, Self.captionLeadingIndent)
+            .padding(.trailing, 12)
         }
     }
 
@@ -170,21 +180,24 @@ struct NotificationRowView: View {
                     profile: profiles[actor.pubkey],
                     profiles: profiles
                 )
-                .padding(.horizontal, -12)
             }
             .buttonStyle(.plain)
         }
         if let qid = item.quoteEventId, !qid.isEmpty {
-            Text("quoted your note")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            QuotedNoteView(
-                eventId: qid,
-                relayHints: item.relayHints,
-                profiles: profiles,
-                onProfileTap: onPeerTap,
-                onNoteTap: { id in onNoteTap?(id, nil) }
-            )
+            VStack(alignment: .leading, spacing: 6) {
+                Text("quoted your note")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                QuotedNoteView(
+                    eventId: qid,
+                    relayHints: item.relayHints,
+                    profiles: profiles,
+                    onProfileTap: onPeerTap,
+                    onNoteTap: { id in onNoteTap?(id, nil) }
+                )
+            }
+            .padding(.leading, Self.captionLeadingIndent)
+            .padding(.trailing, 12)
         }
         inlineReplyList(targetId: actorId)
         if let actor = repo.event(forId: actorId) {
@@ -193,6 +206,8 @@ struct NotificationRowView: View {
                 sending: $sendingReply,
                 viewModel: viewModel
             )
+            .padding(.leading, Self.captionLeadingIndent)
+            .padding(.trailing, 12)
         }
     }
 
@@ -207,7 +222,6 @@ struct NotificationRowView: View {
                     profile: profiles[actor.pubkey],
                     profiles: profiles
                 )
-                .padding(.horizontal, -12)
             }
             .buttonStyle(.plain)
             inlineReplyList(targetId: item.id)
@@ -216,6 +230,8 @@ struct NotificationRowView: View {
                 sending: $sendingReply,
                 viewModel: viewModel
             )
+            .padding(.leading, Self.captionLeadingIndent)
+            .padding(.trailing, 12)
         }
     }
 
@@ -229,26 +245,32 @@ struct NotificationRowView: View {
                 onProfileTap: onPeerTap,
                 onNoteTap: { id in onNoteTap?(id, nil) }
             )
+            .padding(.leading, Self.captionLeadingIndent)
+            .padding(.trailing, 12)
         }
     }
 
     @ViewBuilder
     private var zapExpansion: some View {
-        if !item.referencedEventId.isEmpty {
-            QuotedNoteView(
-                eventId: item.referencedEventId,
-                relayHints: [],
-                profiles: profiles,
-                onProfileTap: onPeerTap,
-                onNoteTap: { id in onNoteTap?(id, nil) }
-            )
+        VStack(alignment: .leading, spacing: 10) {
+            if !item.referencedEventId.isEmpty {
+                QuotedNoteView(
+                    eventId: item.referencedEventId,
+                    relayHints: [],
+                    profiles: profiles,
+                    onProfileTap: onPeerTap,
+                    onNoteTap: { id in onNoteTap?(id, nil) }
+                )
+            }
+            let msg = item.zapMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !msg.isEmpty {
+                Text("\u{201C}\(msg)\u{201D}")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+            }
         }
-        let msg = item.zapMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !msg.isEmpty {
-            Text("\u{201C}\(msg)\u{201D}")
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-        }
+        .padding(.leading, Self.captionLeadingIndent)
+        .padding(.trailing, 12)
     }
 
     @ViewBuilder
@@ -265,7 +287,6 @@ struct NotificationRowView: View {
                             profile: profiles[e.pubkey] ?? ProfileRepository.shared.get(e.pubkey),
                             profiles: profiles
                         )
-                        .padding(.horizontal, -12)
                     }
                     .buttonStyle(.plain)
                 }
