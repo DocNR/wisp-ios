@@ -123,6 +123,11 @@ struct PostCardView: View {
         if repoBox.counts.reposters.contains(me) { return true }
         return engagement?.reposters.contains(me) == true
     }
+    private var iZapped: Bool {
+        guard let me = myPubkey else { return false }
+        if repoBox.counts.zappers.contains(where: { $0.pubkey == me }) { return true }
+        return engagement?.zappers.contains(where: { $0.pubkey == me }) == true
+    }
 
     /// Engagement counts merged across the parent-passed `engagement` and the
     /// shared optimistic state in `EngagementRepository`. Keeps reaction /
@@ -462,7 +467,7 @@ struct PostCardView: View {
                 actionItem(
                     image: settings.zapImage,
                     label: zapLabel(repoBox.counts.zapSats > 0 ? repoBox.counts.zapSats : (engagement?.zapSats ?? 0)),
-                    tint: (repoBox.counts.zapSats > 0 || (engagement?.zapSats ?? 0) > 0) ? Color.wispZapColor : nil
+                    tint: iZapped ? Color.wispZapColor : nil
                 )
             }
             .buttonStyle(.plain)
@@ -497,7 +502,7 @@ struct PostCardView: View {
 
     private var repostAction: some View {
         let count = resolvedRepostCount
-        let tint: Color? = iReposted ? Color.wispRepostColor : (count > 0 ? Color.wispRepostColor : nil)
+        let tint: Color? = iReposted ? Color.wispRepostColor : nil
         return Menu {
             Button {
                 sendRepost()
