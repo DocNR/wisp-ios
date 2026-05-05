@@ -10,8 +10,21 @@ final class ThreadViewModel {
 
     var rootId: String
     var rootEvent: NostrEvent?
-    var flat: [ThreadRow] = []
+    /// Chain from root → focal-1, in order. Empty when the focal is the root.
+    var ancestors: [ThreadRow] = []
+    /// The focal event for this screen — usually `events[seedEventId]`.
+    var focal: ThreadRow?
+    /// Direct replies to the focal, sorted oldest first.
+    var replies: [ThreadRow] = []
+    /// Count of direct replies excluding blocked-author rows. Used by the
+    /// thread UI so an all-blocked thread reads as "no replies" rather than
+    /// surfacing a count followed by suppressed entries.
+    var visibleRepliesCount: Int { replies.lazy.filter { !$0.isBlocked }.count }
+    /// Replies hidden by the on-device spam filter, surfaced behind a "X hidden" expander.
     var hiddenSpamReplies: [ThreadRow] = []
+    /// Direct-child counts per event id, derived from the local `events` map.
+    /// Drives the "View N replies" hint on rows that have descendants we know about.
+    var childCounts: [String: Int] = [:]
     var profiles: [String: ProfileData] = [:]
     var engagement: [String: EngagementCounts] = [:]
     var isLoading = false
@@ -40,8 +53,8 @@ final class ThreadViewModel {
     /// relay subscription only delivers truly new events.
     @ObservationIgnored private var engagementSinceFloor: Int = 0
     @ObservationIgnored private var hiddenSpamPubkeys: Set<String> = []
-    @ObservationIgnored private var spamScoringInflight: Set<String> = []
     @ObservationIgnored private var blockedEventIds: Set<String> = []
+    @ObservationIgnored private var spamScoringInflight: Set<String> = []
 
     @ObservationIgnored private let eventStore = EventStore.shared
     @ObservationIgnored private let profileRepo = ProfileRepository.shared
@@ -98,7 +111,7 @@ final class ThreadViewModel {
             events.removeValue(forKey: id)
             blockedEventIds.remove(id)
         }
-        rebuildTree()
+        rebuildSlices()
     }
 
     /// Ingest a kind-1 the user just published from outside this thread (typically the
@@ -128,14 +141,53 @@ final class ThreadViewModel {
         // 1. Seed from cache: fast path so the screen isn't blank.
         await seedFromCache()
 
-        // 2. Resolve the relay set we'll query for replies (root author inbox + top scored).
-        var relays = await resolveRelays()
+        // 2. Initial relay set (focal author + scored + indexer fallback when
+        //    rootEvent isn't loaded). This is the widest set we'll have until
+        //    the root resolves.
+        let initialRelays = await resolveRelays()
 
-        // 3. If we still don't have the root, fetch it (one-shot — needs to complete before
-        //    streaming so we can compute the correct rootId / author inbox).
-        if rootEvent == nil {
-            await fetchRoot(from: relays)
-            relays = await resolveRelays()
+        // 3. Open live subscriptions IMMEDIATELY so reply / ancestor events
+        //    stream in concurrently with the explicit fetches below.
+        //    Previously fetchRoot + fetchAncestorChain ran first sequentially,
+        //    blocking the live stream by up to ~12s on a cold notification
+        //    deep-link — long enough for the user to see "just the focal" and
+        //    reach for pull-to-refresh.
+        startReplyStream(relays: initialRelays)
+        startEngagementBatcher(relays: initialRelays)
+        var seedIds = Set(events.keys)
+        seedIds.insert(rootId)
+        queueEngagement(ids: seedIds)
+
+        // 4. Fetch root + ancestor chain in parallel against the initial set.
+        //    The ancestor walk depends on the seed but not on the root, so
+        //    they don't have to serialize. Both feed events into the same
+        //    `events` map; rebuildSlices fires per-ingest.
+        let needRoot = rootEvent == nil
+        let needAncestors = seedEventId != rootId
+        if needRoot && needAncestors {
+            async let rootFetch: Void = fetchRoot(from: initialRelays)
+            async let ancestorFetch: Void = fetchAncestorChain(from: initialRelays)
+            _ = await (rootFetch, ancestorFetch)
+        } else if needRoot {
+            await fetchRoot(from: initialRelays)
+        } else if needAncestors {
+            await fetchAncestorChain(from: initialRelays)
+        }
+
+        // 5. Once the root is loaded, re-resolve relays (now using the real
+        //    root author's outbox) and re-stream so the broader set catches
+        //    descendants the initial set may have missed. Saves the user
+        //    from pull-to-refresh on cold notification loads.
+        if rootEvent != nil {
+            let widerRelays = await resolveRelays()
+            if Set(widerRelays) != Set(initialRelays) {
+                cancelStreams()
+                startReplyStream(relays: widerRelays)
+                startEngagementBatcher(relays: widerRelays)
+                var ids2 = Set(events.keys)
+                ids2.insert(rootId)
+                queueEngagement(ids: ids2)
+            }
         }
 
         // Hydrate every pubkey the root note references (author + repost inner + npub
@@ -146,15 +198,6 @@ final class ThreadViewModel {
                 else { queueProfileFetch(pk) }
             }
         }
-
-        // 4. Open live subscriptions for replies + engagement and let the UI update as events
-        //    arrive. The relay race is what makes the thread feel instant.
-        startReplyStream(relays: relays)
-        startEngagementBatcher(relays: relays)
-        // Seed the engagement subscription with the root + everything we already have from cache.
-        var seedIds = Set(events.keys)
-        seedIds.insert(rootId)
-        queueEngagement(ids: seedIds)
     }
 
     func refresh() async {
@@ -180,7 +223,7 @@ final class ThreadViewModel {
 
     // MARK: - Reply
 
-    /// Sends a kind:1 reply to `parentId` (defaults to the current root). Publishes to the user's
+    /// Sends a kind:1 reply to `parentId` (defaults to the focal). Publishes to the user's
     /// own write relays plus the inbox relays of the root author, parent author, and every pubkey
     /// already participating in the chain.
     /// Begin an undo countdown before actually publishing the reply (length
@@ -260,7 +303,10 @@ final class ThreadViewModel {
             errorMessage = "Thread root unavailable"
             return
         }
-        let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? root
+        // Default reply parent is the screen's focal, not the root. Each pushed
+        // ThreadView replies to its own focal.
+        let defaultParent: NostrEvent = events[seedEventId] ?? root
+        let parent: NostrEvent = pending.parentId.flatMap { events[$0] } ?? defaultParent
 
         isSending = true
         defer { isSending = false }
@@ -323,21 +369,33 @@ final class ThreadViewModel {
         if profiles[keypair.pubkey] == nil, let me = profileRepo.get(keypair.pubkey) {
             profiles[keypair.pubkey] = me
         }
-        rebuildTree()
+        rebuildSlices()
     }
 
     // MARK: - Cache seed
 
     private func seedFromCache() async {
-        // Try to find the seed event itself (it could be the root, or a reply that points to a root).
-        let seedScan = await eventStore.loadThreadCache(rootId: seedEventId)
-        if let seedEvent = seedScan.first(where: { $0.id == seedEventId }) {
+        // Fast path: direct id lookup for the seed so we can paint the root note
+        // immediately. The thread-cache substring scan below is O(all kind-1 events)
+        // and is what made tapping a feed note feel laggy — flipping `rootEvent`
+        // synchronously here lets the UI render before we walk the replies.
+        if let seedEvent = await eventStore.eventsByIds([seedEventId]).first {
             let resolvedRoot = Nip10.rootId(of: seedEvent) ?? seedEvent.id
             rootId = resolvedRoot
             events[seedEvent.id] = seedEvent
             if seedEvent.id == resolvedRoot {
                 rootEvent = seedEvent
+                isLoading = false
             }
+        }
+
+        // If the seed was a reply, pull its true root by id too so the header
+        // renders without waiting on the network.
+        if rootEvent == nil, rootId != seedEventId,
+           let cachedRoot = await eventStore.eventsByIds([rootId]).first {
+            events[cachedRoot.id] = cachedRoot
+            rootEvent = cachedRoot
+            isLoading = false
         }
 
         // Now load the full thread cache anchored at the resolved root.
@@ -362,7 +420,7 @@ final class ThreadViewModel {
         }
 
         if !events.isEmpty {
-            rebuildTree()
+            rebuildSlices()
             var referenced = Set<String>()
             for event in events.values {
                 for pk in FeedViewModel.referencedAuthorPubkeys(in: event) {
@@ -407,10 +465,35 @@ final class ThreadViewModel {
             }
         }
 
+        // Focal author inbox — replies to the focal are sent to its
+        // author's read relays (NIP-65 outbox model). When the focal
+        // isn't the root, the root author's inbox alone misses every
+        // reply that came in via the focal author's relay set, which
+        // is what made deep-thread navigation render "no replies".
+        let focalAuthor = events[seedEventId]?.pubkey ?? authorHint
+        if let pk = focalAuthor, pk != rootAuthor {
+            for url in await relayListRepo.getReadRelays(pk) where seen.insert(url).inserted {
+                ordered.append(url)
+            }
+        }
+
         // Top scored relays (highest follow coverage) — mirrors the Android `take(5)` safety net.
         if let board = RelayScoreBoard.load(pubkey: keypair.pubkey) {
             for relay in board.scoredRelays.prefix(5) where seen.insert(relay.url).inserted {
                 ordered.append(relay.url)
+            }
+        }
+
+        // Cold-load safety net: when we don't yet have the root, the
+        // outbox set built above is just `authorHint`'s read relays —
+        // for a notification deep-link that's the user's own inbox,
+        // which usually doesn't carry the thread root or its ancestors.
+        // Indexer relays catch most events and let fetchRoot resolve so
+        // the second resolveRelays() pass can use the real root author's
+        // outbox set.
+        if rootEvent == nil {
+            for url in Self.indexerRelays where seen.insert(url).inserted {
+                ordered.append(url)
             }
         }
 
@@ -451,19 +534,53 @@ final class ThreadViewModel {
         }
     }
 
+    /// Walk `Nip10.replyTarget` upward from the focal, fetching any missing intermediate
+    /// ancestors one event at a time so the chain renders without waiting for the broad
+    /// `e: [rootId]` replies stream. Bounded at 30 hops as a safety stop.
+    private func fetchAncestorChain(from relays: [String]) async {
+        guard var current = events[seedEventId] else { return }
+        for _ in 0..<30 {
+            guard let parentId = Nip10.replyTarget(of: current) else { break }
+            if let parent = events[parentId] {
+                current = parent
+                continue
+            }
+            var filter = NostrFilter()
+            filter.ids = [parentId]
+            filter.limit = 1
+            let results = await RelayPool.query(relays: relays, filter: filter, timeout: 6)
+            guard let parent = results.first(where: { $0.id == parentId }) else { break }
+            events[parent.id] = parent
+            await eventStore.persist([parent])
+            if parent.id == rootId { rootEvent = parent }
+            current = parent
+        }
+        rebuildSlices()
+    }
+
     /// Open a live subscription for replies. Events are merged into the UI as each relay sends
     /// them — no waiting on EOSE. After `duration` seconds the subscription is cancelled.
     private func startReplyStream(relays: [String], duration: TimeInterval = 12) {
         guard !relays.isEmpty else { return }
-        let filter = NostrFilter(kinds: [1], eTags: [rootId], limit: 500)
+        // Query for events tagging the root OR the focal — root catches the
+        // whole tree, focal catches direct children that some relays may
+        // store without the root e-tag.
+        var eTagTargets = [rootId]
+        if seedEventId != rootId { eTagTargets.append(seedEventId) }
+        let filter = NostrFilter(kinds: [1], eTags: eTagTargets, limit: 500)
         let subId = "thread-replies-\(UUID().uuidString.prefix(6))"
         let sub = RelayPool.subscribe(relays: relays, filter: filter, id: subId)
 
-        let consumer = Task { [weak self, rootId] in
+        let consumer = Task { [weak self, rootId, seedEventId] in
             for await (event, _) in sub.events {
                 guard let self else { break }
                 guard event.kind == 1 else { continue }
-                guard event.tags.contains(where: { $0.count >= 2 && $0[0] == "e" && $0[1] == rootId }) else { continue }
+                // Accept any event tagging the root or the focal — both
+                // are valid for the current screen.
+                guard event.tags.contains(where: { tag in
+                    guard tag.count >= 2, tag[0] == "e" else { return false }
+                    return tag[1] == rootId || tag[1] == seedEventId
+                }) else { continue }
                 let snap = SafetyFilter.shared.snapshot
                 if snap.blockedPubkeys.contains(event.pubkey) {
                     // Keep as a placeholder; do not score for spam.
@@ -504,7 +621,7 @@ final class ThreadViewModel {
         }
 
         queueEngagement(ids: [event.id])
-        rebuildTree()
+        rebuildSlices()
         if isLoading { isLoading = false }
     }
 
@@ -648,44 +765,63 @@ final class ThreadViewModel {
         }
     }
 
-    // MARK: - Tree
+    // MARK: - Slices
 
-    private func rebuildTree() {
-        var parentToChildren: [String: [NostrEvent]] = [:]
-        for event in events.values where event.id != rootId {
-            var parentId = Nip10.replyTarget(of: event) ?? rootId
-            // If the named parent isn't in this thread, attach to root so the message is still visible.
-            if parentId != rootId, events[parentId] == nil {
-                parentId = rootId
+    /// Recompute `ancestors`, `focal`, `replies`, `childCounts`, and `hiddenSpamReplies`
+    /// from the current `events` map. Called whenever events change.
+    private func rebuildSlices() {
+        focal = events[seedEventId].map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
+        ancestors = computeAncestors()
+
+        // Tally direct children per parent so reply rows can show a
+        // "View N replies" hint as soon as any descendants are loaded.
+        var counts: [String: Int] = [:]
+        for event in events.values {
+            guard let parentId = Nip10.replyTarget(of: event) else { continue }
+            counts[parentId, default: 0] += 1
+        }
+        childCounts = counts
+
+        let directReplies = events.values
+            .filter { event in
+                guard event.id != seedEventId else { return false }
+                return Nip10.replyTarget(of: event) == seedEventId
             }
-            parentToChildren[parentId, default: []].append(event)
-        }
-        for key in parentToChildren.keys {
-            parentToChildren[key]?.sort { $0.createdAt < $1.createdAt }
-        }
-
-        var rows: [ThreadRow] = []
-        var visited = Set<String>()
-        dfs(parentId: rootId, depth: 0, parentToChildren: parentToChildren, visited: &visited, into: &rows)
+            .sorted { $0.createdAt < $1.createdAt }
 
         if hiddenSpamPubkeys.isEmpty {
-            flat = rows
+            replies = directReplies.map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
             hiddenSpamReplies = []
         } else {
             var visible: [ThreadRow] = []
             var hidden: [ThreadRow] = []
-            for row in rows {
-                // Blocked placeholder rows are never spam-hidden — they already
-                // have no visible content, so burying them again adds no value.
-                if !row.isBlocked, hiddenSpamPubkeys.contains(row.event.pubkey) {
-                    hidden.append(row)
-                } else {
-                    visible.append(row)
-                }
+            for event in directReplies {
+                let row = ThreadRow(event: event, isBlocked: blockedEventIds.contains(event.id))
+                if row.isBlocked { visible.append(row); continue }
+                if hiddenSpamPubkeys.contains(event.pubkey) { hidden.append(row) }
+                else { visible.append(row) }
             }
-            flat = visible
+            replies = visible
             hiddenSpamReplies = hidden
         }
+    }
+
+    /// Walk parent-of-parent from focal up to root, returning the chain in root → focal-1 order.
+    /// Stops at the first missing event (the live stream / `fetchAncestorChain` will fill in
+    /// gaps and this gets called again).
+    private func computeAncestors() -> [ThreadRow] {
+        guard let focal = events[seedEventId] else { return [] }
+        var chain: [NostrEvent] = []
+        var current = focal
+        var seen: Set<String> = [focal.id]
+        for _ in 0..<30 {
+            guard let parentId = Nip10.replyTarget(of: current),
+                  seen.insert(parentId).inserted,
+                  let parent = events[parentId] else { break }
+            chain.append(parent)
+            current = parent
+        }
+        return chain.reversed().map { ThreadRow(event: $0, isBlocked: blockedEventIds.contains($0.id)) }
     }
 
     // MARK: - NSpam
@@ -711,40 +847,21 @@ final class ThreadViewModel {
                 self.spamScoringInflight.remove(author)
                 guard let s = score, s >= SpamScorer.spamThreshold else { return }
                 self.hiddenSpamPubkeys.insert(author)
-                self.rebuildTree()
+                self.rebuildSlices()
             }
         }
     }
 
-    /// Surface a previously-hidden reply: drop the author from the local hidden set, add to the
-    /// global safelist so they bypass scoring on every future reply, and rebuild the tree.
     func revealHiddenSpamAuthor(_ pubkey: String) {
         hiddenSpamPubkeys.remove(pubkey)
         SafetyPreferences.shared.addToSafelist(pubkey)
         Task { await SpamScorer.shared.invalidate(pubkey: pubkey) }
-        rebuildTree()
-    }
-
-    private func dfs(
-        parentId: String,
-        depth: Int,
-        parentToChildren: [String: [NostrEvent]],
-        visited: inout Set<String>,
-        into out: inout [ThreadRow]
-    ) {
-        guard let children = parentToChildren[parentId] else { return }
-        for child in children {
-            if !visited.insert(child.id).inserted { continue }
-            out.append(ThreadRow(event: child, depth: depth, isBlocked: blockedEventIds.contains(child.id)))
-            dfs(parentId: child.id, depth: depth + 1, parentToChildren: parentToChildren, visited: &visited, into: &out)
-        }
+        rebuildSlices()
     }
 }
 
 struct ThreadRow: Identifiable {
     let event: NostrEvent
-    let depth: Int
     var isBlocked: Bool = false
     var id: String { event.id }
 }
-

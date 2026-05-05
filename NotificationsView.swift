@@ -4,7 +4,11 @@ struct NotificationsView: View {
     @Bindable var viewModel: NotificationsViewModel
     let onPeerTap: (String) -> Void
     let onDmTap: (String) -> Void
-    var onNoteTap: ((String) -> Void)? = nil
+    /// `(eventId, authorPubkey?)` — author hint is the post's pubkey when
+    /// the row knows it, so the receiving ThreadView can fetch using the
+    /// real focal author's read relays instead of falling back to the
+    /// user's own relay set.
+    var onNoteTap: ((String, String?) -> Void)? = nil
 
     @State private var showFilterSheet = false
 

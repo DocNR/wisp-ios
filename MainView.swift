@@ -15,6 +15,14 @@ struct MainView: View {
     @State private var placeholderPath = NavigationPath()
     @State private var notificationsPath = NavigationPath()
     @State private var searchPath = NavigationPath()
+    /// Per-tab side-channel mirroring the eventIds of any ThreadRoute pushes on
+    /// the matching path, in stack order. Lets ThreadView smart-pop back to an
+    /// already-visited ancestor instead of pushing a duplicate. Maintained by
+    /// ThreadView's `.task` (append) + `.onDisappear` (remove-tail).
+    @State private var feedThreadChain: [String] = []
+    @State private var placeholderThreadChain: [String] = []
+    @State private var notificationsThreadChain: [String] = []
+    @State private var searchThreadChain: [String] = []
     @State private var drawerOpen = false
     @State private var drawerDragOffset: CGFloat = 0
     @State private var engagementRepo = EngagementRepository.shared
@@ -406,7 +414,9 @@ struct MainView: View {
                                 ThreadView(
                                     seedEventId: route.eventId,
                                     authorHint: route.authorPubkey,
-                                    keypair: keypair
+                                    keypair: keypair,
+                                    path: $feedPath,
+                                    chain: $feedThreadChain
                                 )
                             }
                             .navigationDestination(for: LiveStreamRoute.self) { route in
@@ -480,7 +490,9 @@ struct MainView: View {
                                 ThreadView(
                                     seedEventId: route.eventId,
                                     authorHint: route.authorPubkey,
-                                    keypair: keypair
+                                    keypair: keypair,
+                                    path: $searchPath,
+                                    chain: $searchThreadChain
                                 )
                             }
                             .toolbar(.hidden, for: .navigationBar)
@@ -495,8 +507,15 @@ struct MainView: View {
                             onDmTap: { _ in
                                 selectedTab = .messages
                             },
-                            onNoteTap: { eventId in
-                                notificationsPath.append(ThreadRoute(eventId: eventId, authorPubkey: keypair.pubkey))
+                            onNoteTap: { eventId, authorHint in
+                                // Prefer the actual reply author (passed up from
+                                // the row) over keypair.pubkey — gives ThreadView
+                                // a relay set that actually has the focal +
+                                // ancestors instead of the user's own inbox.
+                                notificationsPath.append(ThreadRoute(
+                                    eventId: eventId,
+                                    authorPubkey: authorHint ?? keypair.pubkey
+                                ))
                             }
                         )
                         .navigationDestination(for: ProfileRoute.self) { route in
@@ -512,7 +531,9 @@ struct MainView: View {
                             ThreadView(
                                 seedEventId: route.eventId,
                                 authorHint: route.authorPubkey,
-                                keypair: keypair
+                                keypair: keypair,
+                                path: $notificationsPath,
+                                chain: $notificationsThreadChain
                             )
                         }
                         .toolbar(.hidden, for: .navigationBar)
@@ -532,7 +553,9 @@ struct MainView: View {
                                 ThreadView(
                                     seedEventId: route.eventId,
                                     authorHint: route.authorPubkey,
-                                    keypair: keypair
+                                    keypair: keypair,
+                                    path: $placeholderPath,
+                                    chain: $placeholderThreadChain
                                 )
                             }
                             .toolbar(.hidden, for: .navigationBar)
@@ -848,24 +871,31 @@ struct MainView: View {
                         // identity on every prepend, forcing SwiftUI to
                         // re-instantiate every visible PostCardView.
                         ForEach(viewModel.events, id: \.id) { event in
-                            NavigationLink(value: ThreadRoute(eventId: event.id, authorPubkey: event.pubkey)) {
-                                PostCardView(
-                                    event: event,
-                                    profile: viewModel.profiles[event.pubkey],
-                                    profiles: viewModel.profiles,
-                                    engagement: nil,
-                                    onProfileTap: { pubkey in
-                                        Task { await viewModel.requestProfileIfNeeded(pubkey) }
-                                    },
-                                    onNoteTap: { eventId in
-                                        feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: event.pubkey))
-                                    },
-                                    onHashtagTap: { tag in
-                                        feedPath.append(HashtagFeedRoute(tag: tag))
-                                    }
-                                )
+                            PostCardView(
+                                event: event,
+                                profile: viewModel.profiles[event.pubkey],
+                                profiles: viewModel.profiles,
+                                engagement: nil,
+                                onProfileTap: { pubkey in
+                                    Task { await viewModel.requestProfileIfNeeded(pubkey) }
+                                },
+                                onNoteTap: { eventId in
+                                    feedPath.append(ThreadRoute(eventId: eventId, authorPubkey: event.pubkey))
+                                },
+                                onHashtagTap: { tag in
+                                    feedPath.append(HashtagFeedRoute(tag: tag))
+                                }
+                            )
+                            // Programmatic push instead of wrapping the card in a
+                            // NavigationLink — the link's press gesture loses races
+                            // against the inner avatar / action-bar / link buttons,
+                            // so taps on empty card space frequently needed two
+                            // presses to fire. Inner Buttons still capture their
+                            // own taps before this gesture runs.
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                feedPath.append(ThreadRoute(eventId: event.id, authorPubkey: event.pubkey))
                             }
-                            .buttonStyle(.plain)
                             .onAppear {
                                 engagementRepo.markVisible(eventId: event.id, author: event.pubkey)
                                 if let idx = viewModel.events.firstIndex(where: { $0.id == event.id }),
