@@ -787,16 +787,35 @@ struct PostCardView: View {
         return ordered.sorted { ($0.lowercased()) < ($1.lowercased()) }
     }
 
+    /// SF Symbol action item. Sizes via `.font(.system(size:))` so each
+    /// symbol picks its natural visual weight — `arrow.2.squarepath` and
+    /// other wider glyphs were rendering visibly smaller under the prior
+    /// `.resizable().scaledToFit().frame(15x15)` because scaledToFit shrunk
+    /// the height to keep the aspect ratio.
     private func actionItem(icon: String, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {
-        actionItem(image: Image(systemName: icon), count: count, label: label, tint: tint)
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 17))
+                .frame(width: 22, height: 17, alignment: .center)
+            if let label, !label.isEmpty {
+                Text(label).font(.caption)
+            } else if let count, count > 0 {
+                Text(formatCount(count)).font(.caption)
+            }
+        }
+        .foregroundStyle(tint ?? .secondary)
+        .frame(height: 28)
     }
 
+    /// Bitmap-image action item (zap glyph swap, custom emoji reactions).
+    /// Keeps the resize/frame path because asset / emoji images don't
+    /// participate in the SF Symbol weight system.
     private func actionItem(image: Image, count: Int? = nil, label: String? = nil, tint: Color? = nil) -> some View {
         HStack(spacing: 4) {
             image
                 .resizable()
                 .scaledToFit()
-                .frame(width: 15, height: 15)
+                .frame(width: 18, height: 18)
             if let label, !label.isEmpty {
                 Text(label).font(.caption)
             } else if let count, count > 0 {
