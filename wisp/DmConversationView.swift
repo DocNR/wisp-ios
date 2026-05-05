@@ -152,7 +152,7 @@ struct DmMessageBubbleView: View {
             VStack(alignment: isMine ? .trailing : .leading, spacing: 2) {
                 Text(message.content)
                     .font(.subheadline)
-                    .foregroundStyle(isMine ? .white : .primary)
+                    .foregroundStyle(isMine ? Color.white : Color.wispOnSurface)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(

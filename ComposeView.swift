@@ -333,6 +333,7 @@ struct ComposeView: View {
                     .background(Color.wispSurfaceVariant.opacity(0.4),
                                 in: RoundedRectangle(cornerRadius: 12))
                 }
+                .buttonStyle(.plain)
                 .padding(.horizontal, 12)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -351,6 +352,7 @@ struct ComposeView: View {
                                         in: RoundedRectangle(cornerRadius: 12))
                             .foregroundStyle(.secondary)
                         }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 12)
                 }
@@ -509,6 +511,7 @@ struct ComposeView: View {
                         .font(.system(size: 22))
                         .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
             }
 
             if !viewModel.pollEnabled {

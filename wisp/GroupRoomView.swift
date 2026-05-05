@@ -173,17 +173,19 @@ private struct GroupMessageBubble: View {
         if message.emojiTags.isEmpty {
             Text(message.content)
                 .font(.subheadline)
-                .foregroundStyle(isMine ? .white : .primary)
+                .foregroundStyle(isMine ? Color.white : Color.wispOnSurface)
         } else {
             // RichContentView handles `:shortcode:` -> inline image substitution
-            // via the synthesized NIP-30 emoji tag list.
+            // via the synthesized NIP-30 emoji tag list. Forcing colorScheme
+            // (the previous behavior) made `.primary` text resolve to black on
+            // dark wispSurfaceVariant bubbles. Inherit the actual scheme and
+            // let the renderer pick the matching tone.
             RichContentView(
                 content: message.content,
                 tags: emojiTagsForRenderer,
                 profiles: [:],
                 showLinkPreviews: false
             )
-            .environment(\.colorScheme, isMine ? .dark : .light)
         }
     }
 
