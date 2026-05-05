@@ -33,21 +33,43 @@ struct ThreadView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         // Ancestors — chain from root → focal-1, each tappable to push
-                        // a new ThreadView focused on that ancestor.
-                        ForEach(viewModel.ancestors) { row in
-                            ancestorRow(row)
-                                .id(row.id)
-                            Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                        // a new ThreadView focused on that ancestor. The whole stack
+                        // gets a 2pt connector line on the leading edge so the chain
+                        // reads as one structural element instead of three loose rows.
+                        if !viewModel.ancestors.isEmpty {
+                            VStack(spacing: 0) {
+                                ForEach(viewModel.ancestors) { row in
+                                    ancestorRow(row)
+                                        .id(row.id)
+                                    Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
+                                }
+                            }
+                            .background(alignment: .leading) {
+                                // Sits behind the row content so the avatars
+                                // (24pt circles centred at ~28pt from the
+                                // leading edge) read as nodes on the line.
+                                Rectangle()
+                                    .fill(Color.wispSurfaceVariant.opacity(0.6))
+                                    .frame(width: 2)
+                                    .padding(.leading, 27)
+                                    .padding(.vertical, 4)
+                                    .allowsHitTesting(false)
+                            }
                         }
 
-                        // Focal — the post this screen is "about". Not tappable; the
-                        // surrounding dividers + reply-count meta line distinguish it
-                        // from the rest of the stack.
+                        // Focal — the post this screen is "about". Not tappable;
+                        // surrounding dividers + tinted background distinguish it.
                         if let focal = viewModel.focal {
                             focalRow(focal)
                                 .id(focal.id)
                         } else if viewModel.isLoading {
                             loadingHeader
+                        }
+
+                        // Section header for replies — replaces the previous
+                        // "X replies" caption tucked under the focal card.
+                        if !viewModel.replies.isEmpty {
+                            repliesSectionHeader
                         }
 
                         // Replies — direct children of the focal, each tappable to push.
@@ -212,20 +234,37 @@ struct ThreadView: View {
                     engagement: engagement(for: row.event.id),
                     useAbsoluteTimestamp: true,
                     onProfileTap: { _ in },
-                    onNoteTap: { _ in },
+                    // Tapping a quoted note inside the focal pushes that
+                    // note as its own focal, same as tapping a reply row.
+                    onNoteTap: { quotedId in
+                        navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
+                    },
                     onHashtagTap: { _ in }
                 )
-            }
-            if !viewModel.replies.isEmpty {
-                Text("\(viewModel.replies.count) \(viewModel.replies.count == 1 ? "reply" : "replies")")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
             }
             Divider().overlay(Color.wispSurfaceVariant.opacity(0.3))
         }
         .background(Color.wispSurfaceVariant.opacity(0.25))
+    }
+
+    /// Section header above the replies list. Replaces the previous "X replies"
+    /// caption stuffed under the focal card so the boundary between focal and
+    /// replies reads as a real section break instead of orphan meta text.
+    private var repliesSectionHeader: some View {
+        HStack(spacing: 6) {
+            Text("REPLIES")
+                .font(.caption2.weight(.semibold))
+                .tracking(0.6)
+                .foregroundStyle(.secondary)
+            Text("·")
+                .foregroundStyle(.secondary)
+            Text("\(viewModel.replies.count)")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     @ViewBuilder
@@ -233,32 +272,27 @@ struct ThreadView: View {
         if row.isBlocked {
             blockedPlaceholder
         } else {
-            let replyCount = effectiveReplyCount(for: row.event.id)
+            // No more "View N replies →" hint here. The action-bar bubble
+            // fills + tints when the reply has its own thread, which is
+            // enough signal — and the whole card is the tap target.
             Button {
                 navigateToThread(eventId: row.event.id, authorPubkey: row.event.pubkey)
             } label: {
-                VStack(alignment: .leading, spacing: 0) {
-                    PostCardView(
-                        event: row.event,
-                        profile: viewModel.profiles[row.event.pubkey],
-                        profiles: viewModel.profiles,
-                        engagement: engagement(for: row.event.id),
-                        onProfileTap: { _ in },
-                        onNoteTap: { _ in },
-                        onHashtagTap: { _ in }
-                    )
-                    if replyCount > 0 {
-                        HStack(spacing: 4) {
-                            Text("\(replyCount) \(replyCount == 1 ? "reply" : "replies")")
-                            Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.semibold))
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.wispPrimary)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
-                    }
-                }
+                PostCardView(
+                    event: row.event,
+                    profile: viewModel.profiles[row.event.pubkey],
+                    profiles: viewModel.profiles,
+                    engagement: engagement(for: row.event.id),
+                    onProfileTap: { _ in },
+                    // Tap on an embedded quoted note pushes that note as
+                    // its own focal. SwiftUI's nested-Button hit-testing
+                    // gives the inner QuotedNoteView's tap area priority,
+                    // so this fires before the surrounding row Button.
+                    onNoteTap: { quotedId in
+                        navigateToThread(eventId: quotedId, authorPubkey: row.event.pubkey)
+                    },
+                    onHashtagTap: { _ in }
+                )
             }
             .buttonStyle(.plain)
         }

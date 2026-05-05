@@ -417,7 +417,12 @@ struct PostCardView: View {
             Button {
                 activeSheet = .replyCompose
             } label: {
-                actionItem(icon: "bubble.right", count: repoBox.counts.replies > 0 ? repoBox.counts.replies : engagement?.replies)
+                let replyCount = repoBox.counts.replies > 0 ? repoBox.counts.replies : (engagement?.replies ?? 0)
+                actionItem(
+                    icon: replyCount > 0 ? "bubble.right.fill" : "bubble.right",
+                    count: replyCount > 0 ? replyCount : nil,
+                    tint: replyCount > 0 ? Color.wispPrimary : nil
+                )
             }
             .buttonStyle(.plain)
             Spacer()
