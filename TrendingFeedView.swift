@@ -175,11 +175,9 @@ struct TrendingFeedView: View {
                                 profile: viewModel.profiles[event.pubkey],
                                 profiles: viewModel.profiles,
                                 engagement: nil,
-                                onProfileTap: { _ in },
-                                onNoteTap: { _ in },
-                                onHashtagTap: { tag in
-                                    onHashtagTap(tag)
-                                }
+                                onProfileTap: { pubkey in onProfileTap(pubkey) },
+                                onNoteTap: { eventId in onNoteTap(eventId) },
+                                onHashtagTap: { tag in onHashtagTap(tag) }
                             )
                         }
                         .buttonStyle(.plain)
