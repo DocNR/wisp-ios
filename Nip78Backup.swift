@@ -31,16 +31,17 @@ nonisolated enum Nip78Backup {
     }
 
     /// NIP-44-encrypt the mnemonic to the user's own pubkey and sign as a kind 30078 event.
-    static func createBackupEvent(privkey32: Data, pubkeyHex: String, mnemonic: String) throws -> NostrEvent {
+    /// Routes through the `Signer` facade so remote (NIP-46) accounts dispatch the encrypt
+    /// + sign over their RPC channel instead of touching a local privkey that doesn't exist.
+    static func createBackupEvent(keypair: Keypair, mnemonic: String) async throws -> NostrEvent {
         let normalized = normalizeMnemonic(mnemonic)
-        let walletId = computeWalletId(normalized)
-        let dTag = buildBackupDTag(walletId: walletId)
+        let dTag = buildBackupDTag(walletId: computeWalletId(normalized))
 
-        guard let pubkey32 = Hex.decode(pubkeyHex) else {
-            throw WalletError.other("invalid pubkey")
-        }
-        let convKey = try Nip44.getConversationKey(privkey32: privkey32, peerXonlyPubkey32: pubkey32)
-        let encrypted = try Nip44.encrypt(plaintext: normalized, conversationKey: convKey)
+        let encrypted = try await Signer.nip44Encrypt(
+            keypair: keypair,
+            peerPubkey: keypair.pubkey,
+            plaintext: normalized
+        )
 
         var tags: [[String]] = [
             ["d", dTag],
@@ -50,24 +51,23 @@ nonisolated enum Nip78Backup {
             tags.append(clientTag)
         }
 
-        return try NostrEvent.sign(
-            privkey32: privkey32,
-            pubkey: pubkeyHex,
+        return try await Signer.sign(
+            keypair: keypair,
             kind: kind,
-            createdAt: Int(Date().timeIntervalSince1970),
             tags: tags,
             content: encrypted
         )
     }
 
     /// Decrypt a backup event and return the mnemonic if it parses as a valid BIP-39 word count.
-    static func decryptBackup(privkey32: Data, event: NostrEvent) -> String? {
+    /// Same Signer-facade routing as `createBackupEvent` so this works for remote signers.
+    static func decryptBackup(keypair: Keypair, event: NostrEvent) async -> String? {
         guard !isDeletedBackup(event) else { return nil }
-        guard let pubkey32 = Hex.decode(event.pubkey) else { return nil }
-        guard let convKey = try? Nip44.getConversationKey(privkey32: privkey32, peerXonlyPubkey32: pubkey32),
-              let decrypted = try? Nip44.decrypt(payload: event.content, conversationKey: convKey) else {
-            return nil
-        }
+        guard let decrypted = try? await Signer.nip44Decrypt(
+            keypair: keypair,
+            peerPubkey: event.pubkey,
+            payload: event.content
+        ) else { return nil }
         let trimmed = decrypted.trimmingCharacters(in: .whitespacesAndNewlines)
         let wordCount = trimmed.split(whereSeparator: { $0.isWhitespace }).count
         return [12, 15, 18, 21, 24].contains(wordCount) ? trimmed : nil

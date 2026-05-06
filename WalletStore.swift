@@ -420,10 +420,6 @@ final class WalletStore {
     /// dedupe by d-tag, decrypt with our own privkey, present results.
     func searchRelayBackup() async {
         relayBackupSearchState = .searching
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            relayBackupSearchState = .error("No signing key available")
-            return
-        }
 
         let relays = backupRelays()
         guard !relays.isEmpty else {
@@ -431,10 +427,17 @@ final class WalletStore {
             return
         }
 
+        // `waitForAllRelays: true` so a slow relay holding the only copy of the
+        // backup gets a chance to respond before its task is cancelled. The
+        // default fast-path breaks 1.5s after the first EOSE, which is too
+        // short for "publish-then-immediately-search" — relays that haven't
+        // received-and-indexed the publish yet EOSE empty first and the slow
+        // relay carrying it gets cut off before EVENT lands.
         let events = await RelayPool.query(
             relays: relays,
             filter: Nip78Backup.backupFilter(pubkey: keypair.pubkey),
-            timeout: 10
+            timeout: 10,
+            waitForAllRelays: true
         )
 
         // Filter to spark-wallet-backup d-tag, dedupe by d-tag (newest wins).
@@ -454,14 +457,19 @@ final class WalletStore {
             return
         }
 
-        let entries: [BackupEntry] = newestPerWallet.values.compactMap { event -> BackupEntry? in
-            guard let mnemonic = Nip78Backup.decryptBackup(privkey32: privkey32, event: event) else { return nil }
-            return BackupEntry(
+        // Sequential await — `decryptBackup` is async because remote signer
+        // accounts dispatch nip44_decrypt over a NIP-46 RPC. Local accounts
+        // resolve in-process and the loop completes near-instantly.
+        var entries: [BackupEntry] = []
+        for event in newestPerWallet.values {
+            guard let mnemonic = await Nip78Backup.decryptBackup(keypair: keypair, event: event) else { continue }
+            entries.append(BackupEntry(
                 mnemonic: mnemonic,
                 walletId: Nip78Backup.extractWalletId(event),
                 createdAt: event.createdAt
-            )
-        }.sorted { $0.createdAt > $1.createdAt }
+            ))
+        }
+        entries.sort { $0.createdAt > $1.createdAt }
 
         switch entries.count {
         case 0: relayBackupSearchState = .notFound
@@ -485,14 +493,9 @@ final class WalletStore {
             relayBackupPublishState = .error("No Spark wallet to back up")
             return
         }
-        guard let privkey32 = Hex.decode(keypair.privkey) else {
-            relayBackupPublishState = .error("No signing key")
-            return
-        }
         do {
-            let event = try Nip78Backup.createBackupEvent(
-                privkey32: privkey32,
-                pubkeyHex: keypair.pubkey,
+            let event = try await Nip78Backup.createBackupEvent(
+                keypair: keypair,
                 mnemonic: mnemonic
             )
             let relays = backupRelays()
