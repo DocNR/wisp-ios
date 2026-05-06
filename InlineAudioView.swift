@@ -1,20 +1,83 @@
 import SwiftUI
-import AVFoundation
 
+/// Inline audio attachment shown inside a note. Holds no AVPlayer of its own —
+/// it commands the global `AudioPlayerStore` and observes its state. This
+/// way audio survives the parent `PostCardView` being recycled by `LazyVStack`,
+/// and the floating mini-player above the tab bar takes over playback chrome.
 struct InlineAudioView: View {
     let meta: MediaMeta
-    @State private var player: AVPlayer?
-    @State private var isPlaying = false
-    @State private var progress: Double = 0
-    @State private var duration: Double = 0
-    @State private var timeObserver: Any?
+    var authorPubkey: String? = nil
+    var authorProfile: ProfileData? = nil
+    @Environment(AudioPlayerStore.self) private var store
+    @State private var hasBeenTapped: Bool = false
+
+    private var isCurrent: Bool { store.isCurrent(url: meta.url) }
+
+    private var displayName: String {
+        let last = URL(string: meta.url)?.deletingPathExtension().lastPathComponent ?? ""
+        return last.isEmpty ? "Audio" : last
+    }
+
+    private func makeTrack() -> AudioTrack {
+        AudioTrack(
+            url: meta.url,
+            title: authorProfile?.displayString,
+            artist: nil,
+            artworkUrl: authorProfile?.picture,
+            authorPubkey: authorPubkey
+        )
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
+        if hasBeenTapped || isCurrent {
+            activeStrip
+        } else {
+            tapToPlayRow
+        }
+    }
+
+    private var tapToPlayRow: some View {
+        Button {
+            hasBeenTapped = true
+            store.play(makeTrack())
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(Color.wispPrimary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tap to play audio")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(displayName)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(Color.wispSurfaceVariant.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var activeStrip: some View {
+        let position = isCurrent ? Double(store.positionMs) / 1000 : 0
+        let duration = isCurrent ? max(0.001, Double(store.durationMs) / 1000) : 0.001
+        let playing = isCurrent && store.isPlaying
+
+        return HStack(spacing: 12) {
             Button {
-                togglePlayback()
+                if isCurrent {
+                    store.togglePlayPause()
+                } else {
+                    store.play(makeTrack())
+                }
             } label: {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 36))
                     .foregroundStyle(Color.wispPrimary)
             }
@@ -26,11 +89,11 @@ struct InlineAudioView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                ProgressView(value: progress, total: max(duration, 0.001))
+                ProgressView(value: position, total: duration)
                     .tint(Color.wispPrimary)
 
                 HStack {
-                    Text(formatTime(progress))
+                    Text(formatTime(position))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -42,42 +105,6 @@ struct InlineAudioView: View {
         }
         .padding(12)
         .background(Color.wispSurfaceVariant.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
-        .onDisappear {
-            player?.pause()
-            if let obs = timeObserver, let p = player {
-                p.removeTimeObserver(obs)
-            }
-        }
-    }
-
-    private var displayName: String {
-        URL(string: meta.url)?.lastPathComponent ?? "Audio"
-    }
-
-    private func togglePlayback() {
-        if player == nil { initPlayer() }
-        guard let p = player else { return }
-        if isPlaying {
-            p.pause()
-        } else {
-            MediaAudioSession.activatePlayback()
-            p.play()
-        }
-        isPlaying.toggle()
-    }
-
-    private func initPlayer() {
-        guard let url = URL(string: meta.url) else { return }
-        let p = AVPlayer(url: url)
-        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        timeObserver = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            progress = time.seconds.isFinite ? time.seconds : 0
-            if let item = p.currentItem {
-                let d = item.duration.seconds
-                duration = d.isFinite ? d : 0
-            }
-        }
-        player = p
     }
 
     private func formatTime(_ seconds: Double) -> String {

@@ -163,6 +163,7 @@ struct QuotedNoteView: View {
                             content: event.content,
                             tags: event.tags,
                             profiles: profiles,
+                            authorPubkey: event.pubkey,
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,

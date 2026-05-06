@@ -5,6 +5,7 @@ import UIKit
 struct wispApp: App {
     @State private var settings = AppSettings.shared
     @State private var powPrefs = PowPreferences.shared
+    @State private var audioPlayer = AudioPlayerStore.shared
 
     init() {
         try? ObjectBoxSetup.setUp()
@@ -37,6 +38,7 @@ struct wispApp: App {
             RootContainer()
                 .environment(settings)
                 .environment(powPrefs)
+                .environment(audioPlayer)
                 .preferredColorScheme(settings.preferredColorScheme)
         }
     }

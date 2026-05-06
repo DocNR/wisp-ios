@@ -198,7 +198,8 @@ private struct GroupMessageBubble: View {
             RichContentView(
                 content: message.content,
                 tags: emojiTagsForRenderer,
-                profiles: [:],
+                profiles: profile.map { [message.senderPubkey: $0] } ?? [:],
+                authorPubkey: message.senderPubkey,
                 showLinkPreviews: false
             )
         }

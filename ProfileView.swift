@@ -322,6 +322,7 @@ private struct ProfileHeaderView: View {
                         content: about,
                         tags: [],
                         profiles: viewModel.profiles,
+                        authorPubkey: viewModel.pubkey,
                         onProfileTap: onProfileTap,
                         onNoteTap: onNoteTap,
                         onHashtagTap: onHashtagTap,
