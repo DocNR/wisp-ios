@@ -69,17 +69,22 @@ enum CurrencyFormatter {
         formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = true
         formatter.groupingSeparator = ","
+        // Sub-dollar amounts use a `min = 0` floor so trailing zeros drop —
+        // "$0.84" instead of "$0.840", "$0.8" instead of "$0.800". The cap
+        // grows as the value shrinks so we don't lose precision on tiny
+        // amounts. Whole-dollar amounts keep two decimal places (the
+        // expected retail convention: "$1.00", not "$1").
         if abs == 0 {
             formatter.minimumFractionDigits = 2
             formatter.maximumFractionDigits = 2
         } else if abs < 0.001 {
-            formatter.minimumFractionDigits = 6
+            formatter.minimumFractionDigits = 0
             formatter.maximumFractionDigits = 6
         } else if abs < 0.01 {
-            formatter.minimumFractionDigits = 4
+            formatter.minimumFractionDigits = 0
             formatter.maximumFractionDigits = 4
         } else if abs < 1.0 {
-            formatter.minimumFractionDigits = 3
+            formatter.minimumFractionDigits = 0
             formatter.maximumFractionDigits = 3
         } else if abs >= 1000.0 {
             formatter.minimumFractionDigits = 0
@@ -107,6 +112,15 @@ final class ExchangeRateCache {
     func satsToFiat(_ sats: Int64, currency code: String) -> Double? {
         guard let btcPrice = rates[code.uppercased()] else { return nil }
         return Double(sats) / 100_000_000.0 * btcPrice
+    }
+
+    /// Inverse of `satsToFiat` — convert a fiat amount in the currency's
+    /// major unit (dollars, euros, etc.) into sats. Returns nil when no
+    /// rate is cached. Used by the zap sheet's custom amount input in fiat
+    /// mode where the user types `1.50` for a $1.50 zap.
+    func fiatToSats(_ majorAmount: Double, currency code: String) -> Int64? {
+        guard let btcPrice = rates[code.uppercased()] else { return nil }
+        return Int64((majorAmount / btcPrice * 100_000_000.0).rounded())
     }
 
     func updateFromService() async {

@@ -60,13 +60,66 @@ struct ZapSheet: View {
         !inFlight && recipientLud16 != nil && store.activeWallet != nil && amountSats > 0
     }
 
-    /// Big amount shown in the hero. While typing custom, mirrors the raw input
-    /// (sats, no formatting). Otherwise: fiat-rendered in fiat mode, grouped sats
-    /// in non-fiat mode.
+    /// Big amount shown in the hero. While typing custom in fiat mode the
+    /// digit string is interpreted register-style (rightmost two digits are
+    /// cents), e.g. "21" → "$0.21", "2100" → "$21.00". Outside fiat mode it
+    /// mirrors the raw input. When not typing: fiat-rendered in fiat mode,
+    /// grouped sats in non-fiat mode.
     private var heroAmountText: String {
-        if isCustom && !customAmountText.isEmpty { return customAmountText }
+        if isCustom && !customAmountText.isEmpty {
+            if settings.fiatModeEnabled {
+                return ZapSheet.formatRegisterCents(
+                    digits: customAmountText,
+                    currencyCode: settings.fiatCurrency
+                )
+            }
+            return customAmountText
+        }
         if settings.fiatModeEnabled { return CurrencyFormatter.short(sats: amountSats) }
         return CurrencyFormatter.formatNumber(amountSats)
+    }
+
+    /// Format a digit-only string as `$X.XX` register-style — last two
+    /// digits are cents, everything before them is whole dollars. Used by
+    /// the hero (live preview) and by the seed function so a previously
+    /// chosen preset's sat value seeds back as the equivalent cents string
+    /// on hero tap.
+    private static func formatRegisterCents(digits: String, currencyCode: String) -> String {
+        let cents = Int64(digits) ?? 0
+        let dollars = Double(cents) / 100.0
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        formatter.usesGroupingSeparator = true
+        formatter.groupingSeparator = ","
+        let body = formatter.string(from: NSNumber(value: dollars)) ?? String(format: "%.2f", dollars)
+        let currency = ExchangeRateService.currency(for: currencyCode)
+        return "\(currency.symbol)\(body)"
+    }
+
+    /// Cents-as-digits seed for the custom amount field. Converts the
+    /// current sats amount through the cached rate, rounds to the nearest
+    /// cent, and returns the digit string with no separator (e.g. 1234
+    /// cents → "1234"). Empty for zero or when no rate is cached.
+    private static func seedCustomText(
+        amountSats: Int64,
+        fiatMode: Bool,
+        fiatCurrency: String
+    ) -> String {
+        guard fiatMode else { return amountSats > 0 ? String(amountSats) : "" }
+        guard amountSats > 0,
+              let dollars = ExchangeRateCache.shared.satsToFiat(amountSats, currency: fiatCurrency)
+        else { return "" }
+        let cents = Int64((dollars * 100.0).rounded())
+        return cents > 0 ? String(cents) : ""
+    }
+
+    /// Register-style sanitiser: digits only. Decimals are dropped because
+    /// the field is interpreted as integer cents — the user types `2100`
+    /// to mean `$21.00` rather than typing the decimal themselves.
+    private static func sanitizeFiatInput(_ text: String) -> String {
+        text.filter(\.isNumber)
     }
 
     var body: some View {
@@ -84,10 +137,18 @@ struct ZapSheet: View {
                         Text(settings.fiatModeEnabled ? "Send Money" : "Send Zap")
                             .font(.title2.weight(.bold))
 
-                        // Big amount display — tap to edit
+                        // Big amount display — tap to edit. Seed the field
+                        // with the unit the user is typing in: cents for fiat
+                        // mode, integer sats otherwise.
                         Button {
                             isCustom = true
-                            if customAmountText.isEmpty { customAmountText = String(amountSats) }
+                            if customAmountText.isEmpty {
+                                customAmountText = ZapSheet.seedCustomText(
+                                    amountSats: amountSats,
+                                    fiatMode: settings.fiatModeEnabled,
+                                    fiatCurrency: settings.fiatCurrency
+                                )
+                            }
                             amountFocused = true
                         } label: {
                             VStack(spacing: 2) {
@@ -186,17 +247,69 @@ struct ZapSheet: View {
                             .buttonStyle(.plain)
                         }
 
-                        // Custom amount input — shown when Custom is selected
+                        // Custom amount input — shown when Custom is selected.
+                        // Fiat mode types in the currency's major unit (dollars,
+                        // euros, etc.) with up to 2 decimal places; non-fiat is
+                        // plain integer sats. Sanitisation runs inside the
+                        // Binding setter so the canonical value is committed
+                        // BEFORE SwiftUI propagates the change — the previous
+                        // re-entrant `onChange { customAmountText = clean }`
+                        // pattern triggered a navigation pop on some screens
+                        // (search → thread → zap) by feeding SwiftUI a state
+                        // mutation mid-diff.
                         if isCustom {
-                            TextField("Amount in sats", text: $customAmountText)
-                                .keyboardType(.numberPad)
-                                .font(.subheadline)
-                                .padding(12)
-                                .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
-                                .focused($amountFocused)
-                                .onChange(of: customAmountText) { _, new in
-                                    amountSats = Int64(new) ?? 0
-                                }
+                            if settings.fiatModeEnabled {
+                                let fiatBinding = Binding<String>(
+                                    get: {
+                                        // Display the field as the formatted dollar
+                                        // value so the user reads "$0.21" while
+                                        // typing rather than the raw digit string.
+                                        customAmountText.isEmpty
+                                            ? ""
+                                            : ZapSheet.formatRegisterCents(
+                                                digits: customAmountText,
+                                                currencyCode: settings.fiatCurrency
+                                            )
+                                    },
+                                    set: { newValue in
+                                        // Strip everything but digits — the
+                                        // currency symbol, comma separator, and
+                                        // decimal point in the displayed string
+                                        // are presentation-only; the canonical
+                                        // value is the cents digit string.
+                                        let digits = ZapSheet.sanitizeFiatInput(newValue)
+                                        customAmountText = digits
+                                        let cents = Int64(digits) ?? 0
+                                        if cents > 0 {
+                                            amountSats = ExchangeRateCache.shared
+                                                .fiatToSats(Double(cents) / 100.0, currency: settings.fiatCurrency) ?? 0
+                                        } else {
+                                            amountSats = 0
+                                        }
+                                    }
+                                )
+                                TextField("Amount", text: fiatBinding)
+                                    .keyboardType(.numberPad)
+                                    .font(.subheadline)
+                                    .padding(12)
+                                    .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                                    .focused($amountFocused)
+                            } else {
+                                let satsBinding = Binding<String>(
+                                    get: { customAmountText },
+                                    set: { newValue in
+                                        let digits = newValue.filter(\.isNumber)
+                                        customAmountText = digits
+                                        amountSats = Int64(digits) ?? 0
+                                    }
+                                )
+                                TextField("Amount in sats", text: satsBinding)
+                                    .keyboardType(.numberPad)
+                                    .font(.subheadline)
+                                    .padding(12)
+                                    .background(Color.wispSurfaceVariant.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                                    .focused($amountFocused)
+                            }
 
                             if canSaveAsPreset {
                                 let atMax = presets.count >= ZapSheet.maxPresets
@@ -281,7 +394,7 @@ struct ZapSheet: View {
                         if inFlight {
                             HStack(spacing: 8) {
                                 ProgressView().tint(.white)
-                                Text("Zapping…")
+                                Text(settings.fiatModeEnabled ? "Sending…" : "Zapping…")
                             }
                         } else {
                             HStack(spacing: 6) {
