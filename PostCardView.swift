@@ -40,6 +40,9 @@ struct PostCardView: View {
     @State private var reactionArrowEdge: Edge = .top
     @State private var showDeleteConfirm = false
     @State private var showMuteUserConfirm = false
+    /// True when the user tapped Zap but no wallet is configured. Surfaces a
+    /// confirmation prompt that can launch the Wallet tab to set one up.
+    @State private var showWalletSetupPrompt = false
     /// Cached pubkey + display name of the user about to be muted, captured
     /// when the menu item is tapped so the confirmation dialog has stable
     /// values to render and act on regardless of whether the underlying
@@ -335,7 +338,7 @@ struct PostCardView: View {
                         onCastVote: { optionIds in handleCastVote(displayEvent, optionIds: optionIds) },
                         onZapVote: { idx in
                             zapPollOptionIndex = idx
-                            activeSheet = .zap
+                            triggerZapOrWalletSetup()
                         }
                     )
                 }
@@ -460,6 +463,20 @@ struct PostCardView: View {
         } message: {
             Text("Their posts will be hidden from your feed and replaced with a placeholder in threads.")
         }
+        .confirmationDialog(
+            settings.fiatModeEnabled ? "Set up a wallet to send money" : "Set up a wallet to send zaps",
+            isPresented: $showWalletSetupPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Set Up Wallet") {
+                NotificationCenter.default.post(name: .openWalletTab, object: nil)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(settings.fiatModeEnabled
+                 ? "Connect a Lightning wallet (Spark or NWC) from the Wallet tab to send money."
+                 : "Connect a Lightning wallet (Spark or NWC) from the Wallet tab to send zaps.")
+        }
         .alert(item: $actionAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
         }
@@ -513,7 +530,7 @@ struct PostCardView: View {
             repostAction
             Spacer()
             Button {
-                activeSheet = .zap
+                triggerZapOrWalletSetup()
             } label: {
                 actionItem(
                     image: settings.zapImage,
@@ -985,6 +1002,19 @@ struct PostCardView: View {
     private func handleCastVote(_ pollEvent: NostrEvent, optionIds: [String]) {
         guard let keypair = NostrKey.load() else { return }
         Task { _ = await PollVoteSender.castVote(pollEvent: pollEvent, optionIds: optionIds, keypair: keypair) }
+    }
+
+    /// Open the zap composer if a wallet is configured. Otherwise surface a
+    /// confirmation prompt that suggests setting one up — without it the
+    /// zap button was a silent no-op (the `.zap` sheet renders nothing
+    /// when `walletStore` is unset, leaving the user wondering whether
+    /// the tap registered).
+    private func triggerZapOrWalletSetup() {
+        if let store = walletStore, store.mode != nil {
+            activeSheet = .zap
+        } else {
+            showWalletSetupPrompt = true
+        }
     }
 }
 
