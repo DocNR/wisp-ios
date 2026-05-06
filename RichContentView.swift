@@ -5,6 +5,10 @@ struct RichContentView: View {
     let content: String
     let tags: [[String]]
     let profiles: [String: ProfileData]
+    /// Hex pubkey of the note's author. When set, audio attachments inherit
+    /// the author's display name + avatar for the floating mini-player so it
+    /// reads as "Alice's audio note" rather than a bare filename.
+    var authorPubkey: String? = nil
     var onProfileTap: ((String) -> Void)? = nil
     var onNoteTap: ((String) -> Void)? = nil
     var onHashtagTap: ((String) -> Void)? = nil
@@ -196,7 +200,11 @@ struct RichContentView: View {
         case .video(let meta):
             InlineVideoView(meta: meta)
         case .audio(let meta):
-            InlineAudioView(meta: meta)
+            InlineAudioView(
+                meta: meta,
+                authorPubkey: authorPubkey,
+                authorProfile: authorPubkey.flatMap { profiles[$0] }
+            )
         case .link(let url):
             if showLinkPreviews {
                 LinkPreviewView(url: url)

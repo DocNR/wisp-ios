@@ -260,6 +260,7 @@ struct PostCardView: View {
                     content: displayEvent.content,
                     tags: displayEvent.tags,
                     profiles: profiles,
+                    authorPubkey: displayEvent.pubkey,
                     onProfileTap: nil,
                     onNoteTap: nil,
                     onHashtagTap: nil
@@ -278,6 +279,7 @@ struct PostCardView: View {
                             content: displayEvent.content,
                             tags: displayEvent.tags,
                             profiles: profiles,
+                            authorPubkey: displayEvent.pubkey,
                             onProfileTap: onProfileTap,
                             onNoteTap: onNoteTap,
                             onHashtagTap: onHashtagTap,

@@ -41,6 +41,7 @@ struct MainView: View {
     @State private var showProofOfWork = false
     @State private var showMediaServers = false
     @State private var hashtagSetRepo = HashtagSetRepository.shared
+    @Environment(AudioPlayerStore.self) private var audioPlayer
     @State private var showRelaySettings = false
     @State private var pendingAuthRequest: PendingAuthRequest?
     @State private var feedFabOpacity: Double = 1.0
@@ -391,9 +392,10 @@ struct MainView: View {
                             if !drawerOpen {
                                 ComposeFAB { showCompose = true }
                                     .padding(.trailing, 18)
-                                    .padding(.bottom, 32)
+                                    .padding(.bottom, 32 + (audioPlayer.currentTrack != nil ? MiniAudioPlayerView.collapsedHeight : 0))
                                     .opacity(feedFabOpacity)
                                     .animation(.easeInOut(duration: 0.2), value: feedFabOpacity)
+                                    .animation(.smooth(duration: 0.22), value: audioPlayer.currentTrack != nil)
                             }
                         }
                             // Frosted unified top header — same `.regularMaterial` look as
@@ -575,11 +577,17 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            if audioPlayer.currentTrack != nil {
+                MiniAudioPlayerView()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                Divider().overlay(Color.wispSurfaceVariant.opacity(0.5))
+            }
 
             bottomBar
         }
         .background(Color.wispBackground)
+        .animation(.smooth(duration: 0.22), value: audioPlayer.currentTrack != nil)
     }
 
     // MARK: - Drawer
