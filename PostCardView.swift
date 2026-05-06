@@ -39,7 +39,18 @@ struct PostCardView: View {
     @State private var heartButtonFrame: CGRect = .zero
     @State private var reactionArrowEdge: Edge = .top
     @State private var showDeleteConfirm = false
+    @State private var showMuteUserConfirm = false
+    /// Cached pubkey + display name of the user about to be muted, captured
+    /// when the menu item is tapped so the confirmation dialog has stable
+    /// values to render and act on regardless of whether the underlying
+    /// PostCardView re-renders during the dialog.
+    @State private var muteCandidate: MuteCandidate?
     @State private var actionAlert: ActionAlert?
+
+    private struct MuteCandidate: Equatable {
+        let pubkey: String
+        let displayName: String
+    }
     /// Single source of truth for every body-level sheet on the card. Stacking
     /// multiple `.sheet(isPresented:)` modifiers on the same view is a known
     /// SwiftUI antipattern that loops on real devices — a sheet's `dismiss()`
@@ -424,6 +435,21 @@ struct PostCardView: View {
         } message: {
             Text("Publishes a NIP-09 deletion request. Relays may keep their copy.")
         }
+        .confirmationDialog(
+            muteCandidate.map { "Mute \($0.displayName)?" } ?? "Mute this user?",
+            isPresented: $showMuteUserConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Mute", role: .destructive) {
+                if let pk = muteCandidate?.pubkey {
+                    MuteRepository.shared.blockUser(pk)
+                }
+                muteCandidate = nil
+            }
+            Button("Cancel", role: .cancel) { muteCandidate = nil }
+        } message: {
+            Text("Their posts will be hidden from your feed and replaced with a placeholder in threads.")
+        }
         .alert(item: $actionAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
         }
@@ -563,7 +589,18 @@ struct PostCardView: View {
 
             if !isMine {
                 Button {
-                    if userMuted { muteRepo.unblockUser(target.pubkey) } else { muteRepo.blockUser(target.pubkey) }
+                    if userMuted {
+                        muteRepo.unblockUser(target.pubkey)
+                    } else {
+                        // Confirmation prompt before muting — direct mute
+                        // can collapse the thread the user is reading
+                        // (per #69) and is hard to discover how to undo.
+                        let displayed = profiles[target.pubkey]?.displayString
+                            ?? profile?.displayString
+                            ?? Nip19.shortNpub(hex: target.pubkey)
+                        muteCandidate = MuteCandidate(pubkey: target.pubkey, displayName: displayed)
+                        showMuteUserConfirm = true
+                    }
                 } label: {
                     Label(userMuted ? "Unmute User" : "Mute User", systemImage: "speaker.slash")
                 }

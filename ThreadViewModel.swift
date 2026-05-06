@@ -105,11 +105,15 @@ final class ThreadViewModel {
 
     @MainActor
     private func purgeAuthor(_ pubkey: String) {
-        let dropped = events.values.filter { $0.pubkey == pubkey }.map(\.id)
-        guard !dropped.isEmpty else { return }
-        for id in dropped {
-            events.removeValue(forKey: id)
-            blockedEventIds.remove(id)
+        let affected = events.values.filter { $0.pubkey == pubkey }.map(\.id)
+        guard !affected.isEmpty else { return }
+        // Mark every event from this author as blocked rather than evicting
+        // it from `events`. `rebuildSlices` reads `blockedEventIds` to render
+        // a placeholder card in place — so the focal / ancestors / replies
+        // keep their positions and the thread doesn't collapse just because
+        // the user muted someone partway through reading (#69).
+        for id in affected {
+            blockedEventIds.insert(id)
         }
         rebuildSlices()
     }
