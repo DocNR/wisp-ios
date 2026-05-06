@@ -242,20 +242,11 @@ struct WalletSettingsView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 28, height: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text((store.nwcNodeAlias?.isEmpty == false ? store.nwcNodeAlias : nil) ?? "Nostr Wallet Connect")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        if let lud = store.lightningAddress, !lud.isEmpty {
-                            Text(lud)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
+                    Text((store.nwcNodeAlias?.isEmpty == false ? store.nwcNodeAlias : nil) ?? "Nostr Wallet Connect")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Spacer(minLength: 0)
                     Image(systemName: showNwcDetails ? "chevron.up" : "chevron.down")
                         .font(.system(size: 12, weight: .semibold))
