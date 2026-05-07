@@ -14,19 +14,28 @@ struct OnboardingView: View {
     }
 
     var body: some View {
-        TabView(selection: $currentPage) {
-            WelcomeStep(onNext: { withAnimation { currentPage = 1 } })
-                .tag(0)
-            OutboxStep(onNext: { withAnimation { currentPage = 2 } })
-                .tag(1)
-            FollowStep(onNext: { withAnimation { currentPage = 3 } })
-                .tag(2)
-            ZapStep(onNext: { withAnimation { currentPage = 4 } })
-                .tag(3)
-            WaitingStep(viewModel: viewModel, keypair: keypair, onComplete: onComplete)
-                .tag(4)
+        // A `TabView(.page)` would let the user swipe horizontally back to
+        // earlier steps — easy to do by accident. Drive the transitions off
+        // a switch instead so the only way forward is the explicit button
+        // each step provides.
+        Group {
+            switch currentPage {
+            case 0:
+                WelcomeStep(onNext: { withAnimation { currentPage = 1 } })
+            case 1:
+                OutboxStep(onNext: { withAnimation { currentPage = 2 } })
+            case 2:
+                FollowStep(onNext: { withAnimation { currentPage = 3 } })
+            case 3:
+                ZapStep(onNext: { withAnimation { currentPage = 4 } })
+            default:
+                WaitingStep(viewModel: viewModel, keypair: keypair, onComplete: onComplete)
+            }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
+        .transition(.asymmetric(
+            insertion: .move(edge: .trailing),
+            removal: .move(edge: .leading)
+        ))
         .background(Color.wispBackground)
         .ignoresSafeArea()
         .task { await viewModel.startOutboxBuilding() }
