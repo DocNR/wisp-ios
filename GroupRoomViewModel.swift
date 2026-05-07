@@ -47,7 +47,6 @@ final class GroupRoomViewModel {
         sendError = nil
         defer { isSending = false }
 
-        let priv = Hex.decode(keypair.privkey) ?? Data()
         let replyInfo: (id: String, author: String)? = replyTarget.map { ($0.id, $0.senderPubkey) }
 
         // Auto-mention p-tags from any nostr:npub1... / nostr:nprofile1... in text.
@@ -80,11 +79,25 @@ final class GroupRoomViewModel {
             emojiMap[shortcode] = url
         }
 
+        // Build tags inline + route signing through `Signer` so remote
+        // (NIP-46) accounts dispatch to the active signer instead of trying
+        // to use the empty-string privkey sentinel. Mirrors the tag layout
+        // in `Nip29.buildChatMessage`.
+        var tags: [[String]] = [["h", groupId, relayUrl]]
+        if let replyInfo {
+            tags.append(["q", replyInfo.id, relayUrl, replyInfo.author])
+            tags.append(["p", replyInfo.author])
+        }
+        tags.append(contentsOf: extraTags)
+
         let event: NostrEvent
         do {
-            event = try Nip29.buildChatMessage(privkey32: priv, pubkey: keypair.pubkey,
-                                               groupId: groupId, relayUrl: relayUrl,
-                                               content: text, replyTo: replyInfo, extraTags: extraTags)
+            event = try await Signer.sign(
+                keypair: keypair,
+                kind: Nip29.kindChatMessage,
+                tags: tags,
+                content: text
+            )
         } catch {
             sendError = "Sign failed"
             return
@@ -136,10 +149,20 @@ final class GroupRoomViewModel {
     }
 
     func sendReaction(messageId: String, targetPubkey: String, emoji: String) async {
-        let priv = Hex.decode(keypair.privkey) ?? Data()
-        guard let event = try? Nip29.buildReaction(privkey32: priv, pubkey: keypair.pubkey,
-                                                   groupId: groupId, messageId: messageId,
-                                                   messageAuthorPubkey: targetPubkey, emoji: emoji) else { return }
+        // Tag layout mirrors `Nip29.buildReaction`; signing routes through
+        // `Signer` for remote (NIP-46) account compatibility.
+        let tags: [[String]] = [
+            ["e", messageId],
+            ["p", targetPubkey],
+            ["h", groupId],
+            ["k", String(Nip29.kindChatMessage)]
+        ]
+        let event: NostrEvent
+        do {
+            event = try await Signer.sign(keypair: keypair, kind: 7, tags: tags, content: emoji)
+        } catch {
+            return
+        }
         // Optimistic local update.
         repository.addReaction(messageId: messageId, reactorPubkey: keypair.pubkey,
                                emoji: emoji, emojiUrl: nil,
